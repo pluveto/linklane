@@ -1,0 +1,205 @@
+import { Button, CheckBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+
+export struct Identity { name: string, original: string, initial: string, tint: color, ink: color, recent: bool }
+export struct Website { address: string, identity: string }
+export global Theme {
+    out property <color> ink: #202124;
+    out property <color> muted: #5f6368;
+    out property <color> accent: #1967d2;
+    out property <color> border: #e8eaed;
+    out property <color> surface: #f1f3f4;
+}
+component Action inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> danger;
+    callback clicked();
+    height: 30px; border-radius: 15px;
+    background: area.has-hover || focus.has-focus ? (root.danger ? #fce8e6 : #e8f0fe) : (root.selected ? #e8f0fe : transparent);
+    accessible-role: button; accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: focus;
+    Text { text: root.text; color: root.danger && area.has-hover ? #c5221f : root.selected ? Theme.accent : Theme.muted; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    focus := FocusScope { key-pressed(e) => { if e.text == "\n" || e.text == " " { root.clicked(); return accept; } return reject; } }
+    area := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+}
+component IdentityButton inherits Rectangle {
+    in property <Identity> identity;
+    callback picked();
+    height: 54px; border-radius: 10px;
+    background: touch.has-hover || focus.has-focus ? #f1f3f4 : transparent;
+    border-width: focus.has-focus ? 1px : 0px; border-color: Theme.accent;
+    accessible-role: button; accessible-label: "用\{identity.name}打开";
+    accessible-action-default => { root.picked(); }
+    forward-focus: focus;
+    animate background { duration: 100ms; }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; padding-top: 10px; padding-bottom: 10px; spacing: 12px;
+        Rectangle {
+            width: 34px; height: 34px; border-radius: 17px; background: root.identity.tint;
+            Text { text: root.identity.initial; color: root.identity.ink; font-size: 15px; font-weight: 600; }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1; alignment: center; spacing: 2px;
+            Text { text: root.identity.name; color: Theme.ink; font-size: 14px; overflow: elide; }
+            if root.identity.name != root.identity.original : Text { text: root.identity.original; color: Theme.muted; font-size: 11px; overflow: elide; }
+        }
+        if root.identity.recent : Text { text: "最近使用"; color: Theme.muted; font-size: 10px; horizontal-stretch: 0; vertical-alignment: center; }
+        Text { text: "›"; color: Theme.muted; font-size: 22px; width: 14px; vertical-alignment: center; horizontal-alignment: right; }
+    }
+    focus := FocusScope { key-pressed(e) => { if e.text == "\n" || e.text == " " { root.picked(); return accept; } return reject; } }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.picked(); } }
+}
+
+export component MainWindow inherits Window {
+    title: "轻舟";
+    no-frame: true;
+    width: 440px;
+    height: root.page == 0 ? 246px + min(6, max(2, root.identities.length)) * 56px + (root.message == "" ? 0px : 48px) : 520px;
+    background: transparent;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    in property <[Identity]> identities;
+    in property <[Website]> websites;
+    in-out property <string> link;
+    in property <string> site;
+    in-out property <bool> remember-site: true;
+    in-out property <bool> always-ask: false;
+    in property <bool> connected: false;
+    in-out property <string> message;
+    in-out property <int> page: 0;
+    callback choose(int);
+    callback forget(int);
+    callback rename(int, string);
+    callback refresh();
+    callback connect();
+    callback pause-changed(bool);
+    callback link-edited(string);
+    callback cancel();
+    callback drag-window();
+    callback minimize();
+    forward-focus: keys;
+    Rectangle {
+        x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+        background: white; border-radius: 14px; border-color: #dadce0; border-width: 1px;
+        drop-shadow-color: #00000020; drop-shadow-blur: 6px; drop-shadow-offset-y: 2px;
+        keys := FocusScope {
+            capture-key-pressed(e) => { if e.text == Key.Escape { root.cancel(); return accept; } return reject; }
+            VerticalLayout {
+                padding: 14px; spacing: 10px;
+                HorizontalLayout {
+                    height: 28px; spacing: 4px;
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        Text { x: 2px; text: "轻舟"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        title-drag := TouchArea {
+                            pointer-event(e) => { if e.kind == PointerEventKind.down && e.button == PointerEventButton.left { root.drag-window(); } }
+                        }
+                    }
+                    minimize-button := Action { width: 28px; text: "−"; accessible-label: "最小化"; clicked => { root.minimize(); } }
+                    close-button := Action { width: 28px; text: "×"; danger: true; accessible-label: "关闭"; clicked => { root.cancel(); } }
+                }
+                if root.page == 0 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: "用哪个身份打开？"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    Rectangle {
+                        height: 34px; border-radius: 17px; background: Theme.surface;
+                        HorizontalLayout {
+                            padding-left: 14px; padding-right: 14px;
+                            url-input := TextInput {
+                                text <=> root.link; font-size: 12px; color: Theme.ink; single-line: true;
+                                vertical-alignment: center; accessible-label: "要打开的网址";
+                                edited => { root.link-edited(self.text); }
+                            }
+                        }
+                        if root.link == "" : Text { x: 14px; text: "粘贴网址"; color: Theme.muted; font-size: 12px; }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        horizontal-scrollbar-policy: always-off;
+                        VerticalLayout {
+                            // Fluent overlays its 14px scrollbar on the content.
+                            // Reserve the track plus a 4px gap outside the rows.
+                            padding-right: 18px;
+                            spacing: 2px;
+                            for identity[index] in root.identities : IdentityButton { identity: identity; picked => { root.choose(index); } }
+                            if root.identities.length == 0 : VerticalLayout {
+                                spacing: 8px;
+                                Text { text: "先在 Chrome 右上角添加一个身份"; color: Theme.muted; wrap: word-wrap; }
+                                Button { text: "重新查找"; clicked => { root.refresh(); } }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+                    remember-check := CheckBox { text: "下次也用这个身份打开此网站"; checked <=> root.remember-site; enabled: root.site != ""; }
+                }
+                if root.page == 1 : VerticalLayout {
+                    spacing: 12px;
+                    Text { text: "已记住的网站"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    Text { text: "点“忘记”，下次就会重新问你。"; color: Theme.muted; font-size: 12px; }
+                    CheckBox { text: "每次都让我选"; checked <=> root.always-ask; toggled => { root.pause-changed(self.checked); } }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        horizontal-scrollbar-policy: always-off;
+                        VerticalLayout {
+                            padding-right: 18px;
+                            spacing: 4px;
+                            for website[index] in root.websites : Rectangle {
+                                height: 58px; border-radius: 8px; background: #f8f9fa;
+                                HorizontalLayout {
+                                    padding: 10px; spacing: 8px;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1; spacing: 4px; alignment: center;
+                                        Text { text: website.address; color: Theme.ink; font-size: 12px; overflow: elide; }
+                                        Text { text: website.identity; color: Theme.muted; font-size: 11px; overflow: elide; }
+                                    }
+                                    Action { text: "忘记"; width: 48px; clicked => { root.forget(index); } }
+                                }
+                            }
+                            if root.websites.length == 0 : Text { text: "还没有记住的网站。\n选择身份后，轻舟会帮你记住。"; color: Theme.muted; wrap: word-wrap; }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+                }
+                if root.page == 2 : VerticalLayout {
+                    spacing: 12px;
+                    Text { text: "我的身份"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    Text { text: "换个好认的名字，只在轻舟中使用。"; color: Theme.muted; font-size: 12px; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        horizontal-scrollbar-policy: always-off;
+                        VerticalLayout {
+                            padding-right: 18px;
+                            spacing: 6px;
+                            for identity[index] in root.identities : Rectangle {
+                                height: 76px; border-radius: 8px; background: #f8f9fa;
+                                VerticalLayout {
+                                    padding: 8px; spacing: 4px;
+                                    Text { text: "Chrome · \{identity.original}"; color: Theme.muted; font-size: 11px; overflow: elide; }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Rectangle { width: 24px; height: 24px; border-radius: 12px; background: identity.tint; Text { text: identity.initial; color: identity.ink; font-size: 11px; } }
+                                        name-input := LineEdit { text: identity.name; accessible-label: "身份名称"; }
+                                        Action { text: "保存"; width: 44px; clicked => { root.rename(index, name-input.text); } }
+                                    }
+                                }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+                    Action { text: "重新查找 Chrome 身份"; clicked => { root.refresh(); } }
+                }
+                if root.message != "" : Text { text: root.message; color: Theme.accent; wrap: word-wrap; font-size: 11px; }
+                Rectangle { height: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    height: 30px; spacing: 2px;
+                    Action { text: root.page == 0 ? "已记住的网站" : "‹ 返回"; width: root.page == 0 ? 100px : 60px; clicked => { root.page = root.page == 0 ? 1 : 0; root.message = ""; } }
+                    Action { text: "我的身份"; width: 72px; selected: root.page == 2; clicked => { root.page = 2; } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Action { text: root.connected ? "已启用" : "开始使用"; width: 72px; clicked => { root.connect(); } }
+                }
+            }
+        }
+    }
+}

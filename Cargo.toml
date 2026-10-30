@@ -1,0 +1,30 @@
+[package]
+name = "linklane"
+version = "0.1.0"
+edition = "2024"
+description = "Open links with the right Chrome identity"
+license = "GPL-3.0-only"
+repository = "https://github.com/pluveto/linklane"
+rust-version = "1.96"
+
+[dependencies]
+anyhow = "1"
+dirs = "6"
+fs2 = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "compat-1-2", "accessibility", "unstable-winit-030"] }
+time = { version = "0.3", features = ["serde"] }
+tempfile = "3"
+url = { version = "2", features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[build-dependencies]
+slint-build = "=1.18.1"
+
+[profile.release]
+lto = "thin"
+strip = true

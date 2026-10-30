@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Linklane — Third-party licenses</title>
+<style>body{max-width:960px;margin:40px auto;padding:0 20px;font:16px/1.6 system-ui}pre{white-space:pre-wrap;background:#f5f5f5;padding:20px}a{color:#1967d2}</style></head>
+<body>
+<h1>Linklane — Third-party licenses</h1>
+<p>Linklane is licensed under GPL-3.0-only. Dependencies retain their respective copyright and license notices.</p>
+{{#each licenses}}
+<section><h2>{{name}}</h2><ul>
+{{#each used_by}}<li>{{crate.name}} {{crate.version}}{{#if crate.repository}} — <a href="{{crate.repository}}">source</a>{{/if}}</li>{{/each}}
+</ul><pre>{{text}}</pre></section>
+{{/each}}
+</body></html>
