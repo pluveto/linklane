@@ -1,6 +1,6 @@
-import { Button, CheckBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit, TextEdit, ScrollView, Palette } from "std-widgets.slint";
 
-export struct Identity { name: string, original: string, initial: string, tint: color, ink: color, recent: bool }
+export struct Identity { name: string, original: string, browser: string, initial: string, tint: color, ink: color, recent: bool }
 export struct Website { address: string, identity: string }
 export global Theme {
     out property <color> ink: #202124;
@@ -29,7 +29,7 @@ component IdentityButton inherits Rectangle {
     height: 54px; border-radius: 10px;
     background: touch.has-hover || focus.has-focus ? #f1f3f4 : transparent;
     border-width: focus.has-focus ? 1px : 0px; border-color: Theme.accent;
-    accessible-role: button; accessible-label: "用\{identity.name}打开";
+    accessible-role: button; accessible-label: "用\{identity.browser}的\{identity.name}打开";
     accessible-action-default => { root.picked(); }
     forward-focus: focus;
     animate background { duration: 100ms; }
@@ -42,7 +42,7 @@ component IdentityButton inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1; alignment: center; spacing: 2px;
             Text { text: root.identity.name; color: Theme.ink; font-size: 14px; overflow: elide; }
-            if root.identity.name != root.identity.original : Text { text: root.identity.original; color: Theme.muted; font-size: 11px; overflow: elide; }
+            Text { text: root.identity.name == root.identity.original ? root.identity.browser : "\{root.identity.browser} · \{root.identity.original}"; color: Theme.muted; font-size: 11px; overflow: elide; }
         }
         if root.identity.recent : Text { text: "最近使用"; color: Theme.muted; font-size: 10px; horizontal-stretch: 0; vertical-alignment: center; }
         Text { text: "›"; color: Theme.muted; font-size: 22px; width: 14px; vertical-alignment: center; horizontal-alignment: right; }
@@ -54,8 +54,8 @@ component IdentityButton inherits Rectangle {
 export component MainWindow inherits Window {
     title: "轻舟";
     no-frame: true;
-    width: 440px;
-    height: root.page == 0 ? 246px + min(6, max(2, root.identities.length)) * 56px + (root.message == "" ? 0px : 48px) : 520px;
+    width: root.page == 3 ? 680px : 440px;
+    height: root.page == 3 ? 720px : root.page == 0 ? 246px + min(6, max(2, root.identities.length)) * 56px + (root.message == "" ? 0px : 48px) : 520px;
     background: transparent;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 13px;
@@ -69,6 +69,18 @@ export component MainWindow inherits Window {
     in property <bool> connected: false;
     in-out property <string> message;
     in-out property <int> page: 0;
+    callback resize-window(length, length);
+    changed page => { root.resize-window(root.width, root.height); }
+    in-out property <string> rules-draft;
+    in-out property <bool> rules-dirty: false;
+    in-out property <string> test-url;
+    in property <string> test-result;
+    in property <string> help-text;
+    in-out property <bool> show-help: false;
+    callback reload-rules();
+    callback apply-rules();
+    callback test-rules();
+    callback rules-help();
     callback choose(int);
     callback forget(int);
     callback rename(int, string);
@@ -126,7 +138,7 @@ export component MainWindow inherits Window {
                             for identity[index] in root.identities : IdentityButton { identity: identity; picked => { root.choose(index); } }
                             if root.identities.length == 0 : VerticalLayout {
                                 spacing: 8px;
-                                Text { text: "先在 Chrome 右上角添加一个身份"; color: Theme.muted; wrap: word-wrap; }
+                                Text { text: "先在 Chrome、Edge、Brave 或 Firefox 中创建身份"; color: Theme.muted; wrap: word-wrap; }
                                 Button { text: "重新查找"; clicked => { root.refresh(); } }
                             }
                             Rectangle { vertical-stretch: 1; }
@@ -136,8 +148,8 @@ export component MainWindow inherits Window {
                 }
                 if root.page == 1 : VerticalLayout {
                     spacing: 12px;
-                    Text { text: "已记住的网站"; color: Theme.ink; font-size: 19px; font-weight: 600; }
-                    Text { text: "点“忘记”，下次就会重新问你。"; color: Theme.muted; font-size: 12px; }
+                    Text { text: "网站与规则"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    Text { text: "按顺序匹配，首条命中生效。"; color: Theme.muted; font-size: 12px; }
                     CheckBox { text: "每次都让我选"; checked <=> root.always-ask; toggled => { root.pause-changed(self.checked); } }
                     ScrollView {
                         vertical-stretch: 1;
@@ -176,7 +188,7 @@ export component MainWindow inherits Window {
                                 height: 76px; border-radius: 8px; background: #f8f9fa;
                                 VerticalLayout {
                                     padding: 8px; spacing: 4px;
-                                    Text { text: "Chrome · \{identity.original}"; color: Theme.muted; font-size: 11px; overflow: elide; }
+                                    Text { text: "\{identity.browser} · \{identity.original}"; color: Theme.muted; font-size: 11px; overflow: elide; }
                                     HorizontalLayout {
                                         spacing: 8px;
                                         Rectangle { width: 24px; height: 24px; border-radius: 12px; background: identity.tint; Text { text: identity.initial; color: identity.ink; font-size: 11px; } }
@@ -188,7 +200,31 @@ export component MainWindow inherits Window {
                             Rectangle { vertical-stretch: 1; }
                         }
                     }
-                    Action { text: "重新查找 Chrome 身份"; clicked => { root.refresh(); } }
+                    Action { text: "重新查找浏览器身份"; clicked => { root.refresh(); } }
+                }
+                if root.page == 3 : VerticalLayout {
+                    spacing: 10px;
+                    Text { text: root.show-help ? "规则说明与身份标识" : "高级规则"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    if root.show-help : TextEdit { text: root.help-text; read-only: true; font-size: 12px; vertical-stretch: 1; accessible-label: "规则说明"; }
+                    if !root.show-help : VerticalLayout {
+                        spacing: 8px;
+                        Text { text: "从上到下匹配。测试草稿后，点击“校验并应用”生效。"; color: Theme.muted; font-size: 12px; }
+                        rules-editor := TextEdit { text <=> root.rules-draft; wrap: no-wrap; font-size: 12px; vertical-stretch: 1; accessible-label: "规则 JSON"; edited => { root.rules-dirty = true; } }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            reload-rules-button := Button { text: root.rules-dirty ? "重新载入（舍弃草稿）" : "重新载入"; clicked => { root.reload-rules(); } }
+                            Button { text: "示例与身份标识"; clicked => { root.rules-help(); } }
+                            Rectangle { horizontal-stretch: 1; }
+                            apply-rules-button := Button { text: "校验并应用"; clicked => { root.apply-rules(); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            test-url-input := LineEdit { text <=> root.test-url; placeholder-text: "粘贴网址，查看匹配原因"; accessible-label: "规则测试网址"; horizontal-stretch: 1; }
+                            test-rules-button := Button { text: "测试草稿"; clicked => { root.test-rules(); } }
+                        }
+                        test-result-view := TextEdit { text: root.test-result; read-only: true; height: 112px; font-size: 12px; accessible-label: "匹配结果"; }
+                    }
+                    if root.show-help : Button { text: "‹ 返回编辑"; clicked => { root.show-help = false; } }
                 }
                 if root.message != "" : Text { text: root.message; color: Theme.accent; wrap: word-wrap; font-size: 11px; }
                 Rectangle { height: 1px; background: Theme.border; }
@@ -196,6 +232,7 @@ export component MainWindow inherits Window {
                     height: 30px; spacing: 2px;
                     Action { text: root.page == 0 ? "已记住的网站" : "‹ 返回"; width: root.page == 0 ? 100px : 60px; clicked => { root.page = root.page == 0 ? 1 : 0; root.message = ""; } }
                     Action { text: "我的身份"; width: 72px; selected: root.page == 2; clicked => { root.page = 2; } }
+                    advanced-button := Action { text: "高级规则"; width: 72px; selected: root.page == 3; clicked => { if !root.rules-dirty { root.reload-rules(); } root.page = 3; root.show-help = false; } }
                     Rectangle { horizontal-stretch: 1; }
                     Action { text: root.connected ? "已启用" : "开始使用"; width: 72px; clicked => { root.connect(); } }
                 }

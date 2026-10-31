@@ -1,8 +1,8 @@
 [package]
 name = "linklane"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Open links with the right Chrome identity"
+description = "Route links to browser identities with explainable rules"
 license = "GPL-3.0-only"
 repository = "https://github.com/pluveto/linklane"
 rust-version = "1.96"
@@ -18,6 +18,9 @@ time = { version = "0.3", features = ["serde"] }
 tempfile = "3"
 url = { version = "2", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+regex = "1"
+globset = "0.4"
+configparser = "3"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

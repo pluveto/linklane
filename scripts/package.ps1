@@ -46,6 +46,8 @@ if (-not (Test-Path -LiteralPath $about)) {
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $staging 'linklane.exe')
 Copy-Item -LiteralPath 'README.md','LICENSE','scripts/uninstall.ps1' -Destination $staging
+New-Item -ItemType Directory -Force -Path (Join-Path $staging 'docs') | Out-Null
+Copy-Item -LiteralPath 'docs/RULES.md','docs/images' -Destination (Join-Path $staging 'docs') -Recurse -Force
 Copy-Item -LiteralPath $exe -Destination (Join-Path $dist 'linklane.exe')
 Copy-Item -LiteralPath (Join-Path $staging 'THIRD_PARTY_LICENSES.html') -Destination $dist
 Compress-Archive -Path "$staging/*" -DestinationPath (Join-Path $dist "linklane-v$version-windows-x86_64.zip") -Force

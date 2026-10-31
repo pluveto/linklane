@@ -3,12 +3,18 @@
 use anyhow::{Result, bail};
 // RATIONALE: main wires callbacks and process lifetime; render is the explicit
 // UI boundary projecting the application state into Slint's generated model.
+mod advanced;
+mod browsers;
+mod config;
+mod identity;
 mod routing;
+mod rules;
+use browsers::{BrowserCatalog, BrowserFamily, Profile};
+use config::{Config, ConfigStore};
 use routing::{
-    Config, Profile, app_home, discover_profiles, install_and_register, is_default, load_config,
-    open_default_settings, open_link, parse_link, remember, remembered_profile, site_key,
-    update_config,
+    app_home, install_and_register, is_default, open_default_settings, parse_link, site_key,
 };
+use rules::{RuleAction, RuleSet};
 use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{cell::RefCell, rc::Rc};
@@ -33,6 +39,7 @@ fn render(ui: &MainWindow, state: &mut State) {
             Identity {
                 name: name.into(),
                 original: p.name.as_str().into(),
+                browser: p.browser_name.as_str().into(),
                 initial: name.chars().next().unwrap_or('人').to_string().into(),
                 tint: slint::Color::from_argb_encoded(p.fill),
                 ink: slint::Color::from_argb_encoded(p.stroke),
@@ -44,25 +51,32 @@ fn render(ui: &MainWindow, state: &mut State) {
     ui.set_websites(ModelRc::new(VecModel::from(
         state
             .config
-            .sites
+            .rules
             .iter()
-            .map(|s| {
-                let name = state
-                    .config
-                    .names
-                    .get(&s.profile)
-                    .cloned()
-                    .or_else(|| {
-                        state
-                            .profiles
-                            .iter()
-                            .find(|p| p.id == s.profile)
-                            .map(|p| p.name.clone())
-                    })
-                    .unwrap_or("已移除的身份，请忘记后重新选择".into());
+            .map(|rule| {
+                let identity = match &rule.action {
+                    RuleAction::Ask => "每次询问".to_owned(),
+                    RuleAction::Open { identity } => state
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.id == *identity)
+                        .map(|profile| {
+                            format!(
+                                "{} · {}",
+                                profile.browser_name,
+                                state.config.names.get(identity).unwrap_or(&profile.name)
+                            )
+                        })
+                        .unwrap_or_else(|| format!("身份暂不可用：{identity}")),
+                };
                 Website {
-                    address: s.site.as_str().into(),
-                    identity: name.into(),
+                    address: rule.name.as_str().into(),
+                    identity: format!(
+                        "{}{}",
+                        if rule.enabled { "" } else { "已停用 · " },
+                        identity
+                    )
+                    .into(),
                 }
             })
             .collect::<Vec<_>>(),
@@ -75,7 +89,10 @@ fn edit_config(state: &mut State, update: impl FnOnce(&mut Config)) -> Result<()
     if state.demo {
         update(&mut state.config);
     } else {
-        state.config = update_config(&state.home, update)?;
+        state.config = ConfigStore::at(&state.home).update(|config| {
+            update(config);
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -85,6 +102,8 @@ fn main() -> Result<()> {
     let demo = args.iter().any(|a| a == "--demo");
     let dry = args.iter().any(|a| a == "--dry-run");
     let choose = args.iter().any(|a| a == "--choose");
+    let explain = args.iter().any(|a| a == "--explain");
+    let list_identities = args.iter().any(|a| a == "--list-identities");
     let screenshot = args
         .iter()
         .position(|a| a == "--screenshot")
@@ -92,7 +111,7 @@ fn main() -> Result<()> {
         .cloned();
     if args.iter().any(|a| a == "--help") {
         println!(
-            "Linklane [--choose] [--dry-run] [https://example.com]\n  --demo         Isolated sample identities; never opens Chrome or writes settings\n  --screenshot PATH  Save a preview and exit (requires --demo)\n  --choose       Ask even for a remembered website\n  --dry-run      Print routing decision without opening anything"
+            "Linklane [--choose] [--dry-run] [https://example.com]\n  --demo         Isolated sample identities; never opens a browser or writes settings\n  --screenshot PATH  Save a preview and exit (requires --demo)\n  --choose       Ask even for a remembered website\n  --dry-run      Print routing decision without opening anything\n  --explain      Explain ordered rule matching without opening anything\n  --list-identities  Print available browser identity IDs"
         );
         return Ok(());
     }
@@ -103,7 +122,7 @@ fn main() -> Result<()> {
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--demo" | "--dry-run" | "--choose" => {}
+            "--demo" | "--dry-run" | "--choose" | "--explain" | "--list-identities" => {}
             "--screenshot" => {
                 index += 1;
                 if index == args.len() {
@@ -125,76 +144,101 @@ fn main() -> Result<()> {
     let config = if demo {
         Config::default()
     } else {
-        load_config(&home).unwrap_or_else(|e| {
-            message = e.to_string();
-            Config::default()
-        })
+        match ConfigStore::at(&home).load() {
+            Ok(config) => config,
+            Err(error) if dry || explain || list_identities => return Err(error),
+            Err(error) => {
+                message = format!("{error:#}");
+                Config::default()
+            }
+        }
     };
     let profiles = if demo {
         vec![
-            Profile {
-                id: "demo-work".into(),
-                name: "工作".into(),
-                fill: 0xffd3e3fd,
-                stroke: 0xff0842a0,
-                ..Profile::default()
-            },
-            Profile {
-                id: "demo-personal".into(),
-                name: "自己的".into(),
-                fill: 0xffc4eed0,
-                stroke: 0xff0f5223,
-                ..Profile::default()
-            },
-            Profile {
-                id: "demo-test".into(),
-                name: "测试用".into(),
-                fill: 0xffffd8e4,
-                stroke: 0xff633b48,
-                ..Profile::default()
-            },
+            Profile::preview(BrowserFamily::Chrome, "Default", "工作")?,
+            Profile::preview(BrowserFamily::Edge, "Default", "测试")?,
+            Profile::preview(BrowserFamily::Brave, "Default", "自己的")?,
+            Profile::preview(BrowserFamily::Firefox, "Profiles/demo", "研究")?,
         ]
     } else {
-        discover_profiles().unwrap_or_else(|e| {
-            message = e.to_string();
-            vec![]
-        })
+        let catalog = BrowserCatalog::discover();
+        if !catalog.warnings.is_empty() {
+            if !message.is_empty() {
+                message.push('\n');
+            }
+            message.push_str(&catalog.warnings.join("\n"));
+        }
+        catalog.profiles
     };
+    if list_identities {
+        for profile in &profiles {
+            println!(
+                "{}\t{} · {}",
+                profile.id, profile.browser_name, profile.name
+            );
+        }
+        if !message.is_empty() {
+            eprintln!("{message}");
+        }
+        return Ok(());
+    }
     let parsed = raw.as_deref().map(parse_link).transpose();
     if let Ok(Some(url)) = &parsed {
-        let target = if choose {
-            None
-        } else {
-            remembered_profile(&config, url, &profiles)
-        };
-        if dry {
-            println!(
-                "{}",
-                target.map(|p| format!("OPEN {p}")).unwrap_or("ASK".into())
-            );
+        let decision =
+            RuleSet::compile(&config.rules)?.decide(url, &profiles, choose || config.always_ask);
+        if dry || explain {
+            if explain {
+                println!("{}", decision.explanation);
+            } else {
+                println!(
+                    "{}",
+                    decision
+                        .identity
+                        .as_ref()
+                        .map_or("ASK".into(), |identity| format!("OPEN {identity}"))
+                );
+            }
             return Ok(());
         }
-        if !demo && let Some(profile) = target {
-            match open_link(profile, url) {
+        if !demo && let Some(identity) = decision.identity {
+            let profile = profiles
+                .iter()
+                .find(|profile| profile.id == identity)
+                .context("选中的身份已改变")?;
+            match profile.open(url) {
                 Ok(()) => {
-                    // Auto-open is a use too. A bookkeeping failure must not open the URL twice.
-                    if let Err(e) = update_config(&home, |c| c.mark_used(profile)) {
-                        eprintln!("{e}");
+                    match ConfigStore::at(&home).update(|config| {
+                        config.mark_used(&identity);
+                        Ok(())
+                    }) {
+                        Ok(_) => return Ok(()),
+                        Err(error) => {
+                            message = format!("网站已打开，最近使用记录保存失败：{error:#}");
+                        }
                     }
-                    return Ok(());
                 }
-                Err(e) => message = e.to_string(),
+                Err(error) => message = format!("{error:#}"),
             }
+        } else if decision.explanation.contains("暂不可用") {
+            message = decision.explanation;
         }
-    } else if let Err(e) = &parsed {
-        if dry {
-            bail!("{e}");
+    } else if let Err(error) = &parsed {
+        if dry || explain {
+            bail!("{error}");
         }
-        message = e.to_string();
-    } else if dry {
-        bail!("Provide a URL with --dry-run");
+        message = error.to_string();
+    } else if dry || explain {
+        bail!("请提供要测试的网址");
     }
     let ui = MainWindow::new()?;
+    ui.on_resize_window({
+        let weak = ui.as_weak();
+        move |width, height| {
+            if let Some(ui) = weak.upgrade() {
+                ui.window().set_size(slint::LogicalSize::new(width, height));
+            }
+        }
+    });
     let initial = raw.clone().unwrap_or_else(|| {
         if demo {
             "https://www.figma.com/design/team-project".into()
@@ -218,6 +262,7 @@ fn main() -> Result<()> {
         incoming: raw.is_some(),
     }));
     render(&ui, &mut state.borrow_mut());
+    advanced::bind(&ui, state.clone())?;
     ui.on_link_edited({
         let weak = ui.as_weak();
         move |value| {
@@ -249,12 +294,12 @@ fn main() -> Result<()> {
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("请重新选择身份"))?;
                 if !state.demo {
-                    open_link(&profile.id, &url)?;
+                    profile.open(&url)?;
                 }
                 edit_config(&mut state, |c| {
                     c.mark_used(&profile.id);
                     if ui.get_remember_site() {
-                        remember(c, &url, &profile.id);
+                        c.remember(&url, &profile.id);
                     }
                 })
                 .context("网站已打开，但没能保存这次选择")?;
@@ -295,20 +340,31 @@ fn main() -> Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            let Some(site) = state
-                .config
-                .sites
-                .get(usize::try_from(index).unwrap_or(usize::MAX))
-                .map(|s| s.site.clone())
-            else {
+            let Ok(index) = usize::try_from(index) else {
                 return;
             };
-            match edit_config(&mut state, |c| c.sites.retain(|s| s.site != site)) {
+            if index >= state.config.rules.len() {
+                return;
+            }
+            let mut rules = state.config.rules.clone();
+            rules.remove(index);
+            let revision = state.config.rules_revision;
+            let result = if state.demo {
+                state.config.rules = rules;
+                Ok(())
+            } else {
+                ConfigStore::at(&state.home)
+                    .replace_rules(rules, revision)
+                    .map(|config| {
+                        state.config = config;
+                    })
+            };
+            match result {
                 Ok(()) => {
                     render(&ui, &mut state);
-                    ui.set_message("已忘记，下次打开这个网站时会重新问你。".into());
+                    ui.set_message("已移除这条规则。其余规则仍按顺序匹配。".into());
                 }
-                Err(e) => ui.set_message(e.to_string().into()),
+                Err(error) => ui.set_message(format!("{error:#}").into()),
             }
         }
     });
@@ -337,7 +393,7 @@ fn main() -> Result<()> {
             }) {
                 Ok(()) => {
                     render(&ui, &mut state);
-                    ui.set_message("名字已保存。Chrome 中的名字不会改变。".into());
+                    ui.set_message("名字已保存在轻舟中。".into());
                 }
                 Err(e) => ui.set_message(e.to_string().into()),
             }
@@ -366,13 +422,13 @@ fn main() -> Result<()> {
             };
             let mut state = state.borrow_mut();
             if !state.demo {
-                match discover_profiles() {
-                    Ok(profiles) => {
-                        state.profiles = profiles;
-                        ui.set_message("已重新查找。".into());
-                    }
-                    Err(e) => ui.set_message(e.to_string().into()),
-                }
+                let catalog = BrowserCatalog::discover();
+                state.profiles = catalog.profiles;
+                ui.set_message(if catalog.warnings.is_empty() {
+                    "已重新查找。".into()
+                } else {
+                    catalog.warnings.join("\n").into()
+                });
             }
             render(&ui, &mut state);
         }
