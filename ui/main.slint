@@ -55,7 +55,7 @@ export component MainWindow inherits Window {
     title: "轻舟";
     no-frame: true;
     width: root.page == 3 ? 680px : 440px;
-    height: root.page == 3 ? 720px : root.page == 0 ? 246px + min(6, max(2, root.identities.length)) * 56px + (root.message == "" ? 0px : 48px) : 520px;
+    height: root.page == 3 ? 720px : root.page == 0 ? 246px + min(6, max(2, root.identities.length)) * 56px + (root.message == "" ? 0px : 48px) + (root.resolution-summary == "" ? 0px : 56px) : 520px;
     background: transparent;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 13px;
@@ -64,6 +64,9 @@ export component MainWindow inherits Window {
     in property <[Website]> websites;
     in-out property <string> link;
     in property <string> site;
+    in property <string> resolved-target;
+    in property <string> resolution-summary;
+    changed resolution-summary => { root.resize-window(root.width, root.height); }
     in-out property <bool> remember-site: true;
     in-out property <bool> always-ask: false;
     in property <bool> connected: false;
@@ -127,6 +130,11 @@ export component MainWindow inherits Window {
                         }
                         if root.link == "" : Text { x: 14px; text: "粘贴网址"; color: Theme.muted; font-size: 12px; }
                     }
+                    if root.resolution-summary != "" : VerticalLayout {
+                        spacing: 4px;
+                        Text { text: root.resolution-summary; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
+                        if root.resolved-target != "" : resolved-target-view := LineEdit { text: root.resolved-target; read-only: true; accessible-label: "匹配目标网址"; }
+                    }
                     ScrollView {
                         vertical-stretch: 1;
                         horizontal-scrollbar-policy: always-off;
@@ -144,7 +152,7 @@ export component MainWindow inherits Window {
                             Rectangle { vertical-stretch: 1; }
                         }
                     }
-                    remember-check := CheckBox { text: "下次也用这个身份打开此网站"; checked <=> root.remember-site; enabled: root.site != ""; }
+                    remember-check := CheckBox { text: root.resolved-target == "" ? "下次也用这个身份打开此网站" : "下次也用这个身份打开目标网站"; checked <=> root.remember-site; enabled: root.site != ""; }
                 }
                 if root.page == 1 : VerticalLayout {
                     spacing: 12px;

@@ -7,6 +7,7 @@ mod advanced;
 mod browsers;
 mod config;
 mod identity;
+mod resolution;
 mod routing;
 mod rules;
 use browsers::{BrowserCatalog, BrowserFamily, Profile};
@@ -83,6 +84,28 @@ fn render(ui: &MainWindow, state: &mut State) {
     )));
     ui.set_always_ask(state.config.always_ask);
     ui.set_connected(!state.demo && is_default());
+    preview_resolution(ui, &state.config);
+}
+
+// RATIONALE: this UI boundary projects the resolved URL without changing the opening URL.
+fn preview_resolution(ui: &MainWindow, config: &Config) {
+    ui.set_resolved_target("".into());
+    ui.set_resolution_summary("".into());
+    ui.set_site("".into());
+    if let Ok(url) = parse_link(ui.get_link().as_str()) {
+        let resolved = config.resolution.resolve(&url);
+        if let Some(target) = resolved.matching_url() {
+            ui.set_site(site_key(target).into());
+            if resolved.changed() {
+                ui.set_resolved_target(target.as_str().into());
+            }
+        } else {
+            ui.set_remember_site(false);
+        }
+        if resolved.changed() {
+            ui.set_resolution_summary(resolved.summary().into());
+        }
+    }
 }
 
 fn edit_config(state: &mut State, update: impl FnOnce(&mut Config)) -> Result<()> {
@@ -184,8 +207,11 @@ fn main() -> Result<()> {
     }
     let parsed = raw.as_deref().map(parse_link).transpose();
     if let Ok(Some(url)) = &parsed {
-        let decision =
-            RuleSet::compile(&config.rules)?.decide(url, &profiles, choose || config.always_ask);
+        let decision = config.resolution.resolve(url).decide(
+            &RuleSet::compile(&config.rules)?,
+            &profiles,
+            choose || config.always_ask,
+        );
         if dry || explain {
             if explain {
                 println!("{}", decision.explanation);
@@ -219,8 +245,8 @@ fn main() -> Result<()> {
                 }
                 Err(error) => message = format!("{error:#}"),
             }
-        } else if decision.explanation.contains("暂不可用") {
-            message = decision.explanation;
+        } else if let Some(notice) = decision.notice {
+            message = notice;
         }
     } else if let Err(error) = &parsed {
         if dry || explain {
@@ -265,15 +291,11 @@ fn main() -> Result<()> {
     advanced::bind(&ui, state.clone())?;
     ui.on_link_edited({
         let weak = ui.as_weak();
-        move |value| {
+        let state = state.clone();
+        move |_value| {
             if let Some(ui) = weak.upgrade() {
-                ui.set_site(
-                    parse_link(value.as_str())
-                        .map(|u| site_key(&u))
-                        .unwrap_or_default()
-                        .into(),
-                );
                 ui.set_remember_site(true);
+                preview_resolution(&ui, &state.borrow().config);
                 ui.set_message("".into());
             }
         }
@@ -288,6 +310,7 @@ fn main() -> Result<()> {
             let outcome = (|| -> Result<()> {
                 let url = parse_link(ui.get_link().as_str())?;
                 let mut state = state.borrow_mut();
+                let resolved = state.config.resolution.resolve(&url);
                 let profile = state
                     .profiles
                     .get(usize::try_from(index).unwrap_or(usize::MAX))
@@ -298,8 +321,10 @@ fn main() -> Result<()> {
                 }
                 edit_config(&mut state, |c| {
                     c.mark_used(&profile.id);
-                    if ui.get_remember_site() {
-                        c.remember(&url, &profile.id);
+                    if ui.get_remember_site()
+                        && let Some(target) = resolved.matching_url()
+                    {
+                        c.remember(target, &profile.id);
                     }
                 })
                 .context("网站已打开，但没能保存这次选择")?;

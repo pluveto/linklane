@@ -10,6 +10,7 @@ use std::{
 use crate::{
     MainWindow, State,
     config::ConfigStore,
+    resolution::ResolutionSettings,
     routing::parse_link,
     rules::{Rule, RuleSet},
 };
@@ -18,12 +19,15 @@ use crate::{
 #[serde(deny_unknown_fields)]
 struct RuleDocument {
     rules: Vec<Rule>,
+    #[serde(default)]
+    resolution: ResolutionSettings,
 }
 
 impl RuleDocument {
     fn read(text: &str) -> Result<Self> {
         let document: Self = serde_json::from_str(text).context("规则 JSON 无效")?;
         RuleSet::compile(&document.rules)?;
+        document.resolution.validate()?;
         Ok(document)
     }
 }
@@ -33,6 +37,7 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
     ui.set_rules_draft(
         serde_json::to_string_pretty(&RuleDocument {
             rules: state.borrow().config.rules.clone(),
+            resolution: state.borrow().config.resolution.clone(),
         })?
         .into(),
     );
@@ -51,6 +56,7 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
                 }
                 let text = serde_json::to_string_pretty(&RuleDocument {
                     rules: state.config.rules.clone(),
+                    resolution: state.config.resolution.clone(),
                 })?;
                 ui.set_rules_draft(text.into());
                 ui.set_rules_dirty(false);
@@ -77,9 +83,13 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
                 let mut state = state.borrow_mut();
                 if state.demo {
                     state.config.rules = document.rules;
+                    state.config.resolution = document.resolution;
                 } else {
-                    state.config = ConfigStore::at(&state.home)
-                        .replace_rules(document.rules, revision.get())?;
+                    state.config = ConfigStore::at(&state.home).replace_routing(
+                        document.rules,
+                        document.resolution,
+                        revision.get(),
+                    )?;
                 }
                 revision.set(state.config.rules_revision);
                 ui.set_rules_dirty(false);
@@ -103,8 +113,14 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
                 let document = RuleDocument::read(ui.get_rules_draft().as_str())?;
                 let url = parse_link(ui.get_test_url().as_str())?;
                 let state = state.borrow();
-                Ok(RuleSet::compile(&document.rules)?
-                    .decide(&url, &state.profiles, state.config.always_ask)
+                Ok(document
+                    .resolution
+                    .resolve(&url)
+                    .decide(
+                        &RuleSet::compile(&document.rules)?,
+                        &state.profiles,
+                        state.config.always_ask,
+                    )
                     .explanation)
             })();
             ui.set_test_result(match result {

@@ -6,6 +6,36 @@ all 全部满足，any 至少一项满足（空数组表示忽略），exclude �
 “每次都让我选”和命令行 --choose 优先于所有规则。
 基础选择器的“记住网站”会更新已有精确来源规则，或把新规则加在末尾；可在编辑器中调整顺序。
 
+## Query 跳转目标
+
+规则先解析 query 中的目标网址，再匹配该目标。实际打开保留完整原始链接，让网站继续完成中转、登录回跳和签名校验。解析全程在本地完成。
+
+例如 https://link.example/out?url=https%3A%2F%2Fgithub.com%2Facme，会按 https://github.com/acme 匹配浏览器身份，浏览器收到的仍是 link.example 的原始链接。勾选记住网站时保存 github.com 的来源。
+
+默认参数（区分大小写）：url、target、redirect、redirect_url、redirect_uri、redirectUrl、destination、dest、return_url、returnUrl、continue。参数值可为 HTTP/HTTPS URL、/ 开头的相对路径或 // 开头的跨域地址。普通搜索词保持原网址。
+
+支持最多 8 层嵌套。每层 query 按 URL 表单规则解码；额外百分号编码最多尝试 3 层，识别出网址即停止，保留目标中的 %2F、%2B 与签名值。不同候选目标、过深嵌套或含账号密码的目标会交回选择器，并暂停自动记忆。重复参数指向同一目标时可继续解析。
+
+高级编辑框在 rules 同级接受 resolution，例如：
+
+```json
+{
+  "rules": [],
+  "resolution": {
+    "parameters": ["url", "target", "redirect_url"],
+    "sites": [
+      { "host": "go.example.com", "parameters": ["to"] },
+      { "host": "login.example.com", "parameters": [] },
+      { "host": "example.org", "subdomains": true, "parameters": ["destination"] }
+    ]
+  }
+}
+```
+
+保留自己的 rules，仅修改 resolution。sites 按顺序取第一条域名匹配项，该项参数列表替换默认列表；空列表表示保留原网址。parameters 与 sites 均为空时全局关闭解析。省略 resolution 会使用默认参数列表。特定网站用 q、u 等参数时，可在 sites 中指定。
+
+“测试草稿”和 --explain 会显示原始链接、逐层参数、匹配目标和命中的浏览器身份。解析结果只用于本次匹配，配置只保存手工设置和记住的目标来源。服务器短链接和 JavaScript 中转页留待后续解析方式支持。
+
 ## 示例
 
 identity 请替换为上方“当前可用身份”中的真实标识。

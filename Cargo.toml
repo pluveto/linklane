@@ -1,6 +1,6 @@
 [package]
 name = "linklane"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Route links to browser identities with explainable rules"
 license = "GPL-3.0-only"
@@ -21,6 +21,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 regex = "1"
 globset = "0.4"
 configparser = "3"
+percent-encoding = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

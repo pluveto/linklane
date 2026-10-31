@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 use crate::{
     browsers::Profile,
     identity::IdentityId,
+    resolution::ResolutionSettings,
     rules::{Rule, RuleSet},
 };
 
@@ -21,6 +22,7 @@ pub(crate) struct Config {
     pub(crate) version: u32,
     pub(crate) names: BTreeMap<IdentityId, String>,
     pub(crate) rules: Vec<Rule>,
+    pub(crate) resolution: ResolutionSettings,
     pub(crate) rules_revision: u64,
     pub(crate) always_ask: bool,
     pub(crate) last_used: Vec<ProfileUse>,
@@ -38,9 +40,10 @@ pub(crate) struct ProfileUse {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: 3,
             names: BTreeMap::new(),
             rules: vec![],
+            resolution: ResolutionSettings::default(),
             rules_revision: 0,
             always_ask: false,
             last_used: vec![],
@@ -100,13 +103,14 @@ impl Config {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.version != 2 {
+        if self.version != 3 {
             bail!(
                 "设置版本 {} 尚无迁移路径，请使用对应版本的轻舟",
                 self.version
             );
         }
         RuleSet::compile(&self.rules)?;
+        self.resolution.validate()?;
         if self
             .names
             .values()
@@ -161,17 +165,28 @@ impl ConfigStore {
         };
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).context("设置 JSON 无效；原文件已保留")?;
-        if value.get("version").is_some() {
-            let config: Config =
-                serde_json::from_value(value).context("设置字段无效；原文件已保留")?;
-            config.validate()?;
-            return Ok(config);
-        }
-        let legacy: LegacyConfig =
-            serde_json::from_value(value).context("旧版设置无效；原文件已保留")?;
-        let config = legacy.migrate()?;
+        let (config, previous_version) = match value.get("version") {
+            Some(version) if version == 3 => {
+                let config: Config =
+                    serde_json::from_value(value).context("设置字段无效；原文件已保留")?;
+                config.validate()?;
+                return Ok(config);
+            }
+            Some(version) if version == 2 => {
+                let legacy: VersionTwo =
+                    serde_json::from_value(value).context("v2 设置字段无效；原文件已保留")?;
+                (legacy.migrate(), 2)
+            }
+            None => {
+                let legacy: LegacyConfig =
+                    serde_json::from_value(value).context("旧版设置无效；原文件已保留")?;
+                (legacy.migrate()?, 1)
+            }
+            Some(version) => bail!("设置版本 {version} 尚无迁移路径；原文件已保留"),
+        };
         config.validate()?;
-        let backup = self.home.join("settings.v1.backup.json");
+        let backup_name = format!("settings.v{previous_version}.backup.json");
+        let backup = self.home.join(&backup_name);
         match fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -184,7 +199,7 @@ impl ConfigStore {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 if fs::read(&backup)? != bytes {
                     bail!(
-                        "已有不同的旧版备份，请先将 settings.v1.backup.json 移到备份目录后重试；当前设置已保留"
+                        "已有不同的旧版备份，请先将 {backup_name} 移到备份目录后重试；当前设置已保留"
                     );
                 }
             }
@@ -207,9 +222,10 @@ impl ConfigStore {
         let _lock = self.lock()?;
         let mut config = self.read_locked()?;
         let previous = config.rules.clone();
+        let previous_resolution = config.resolution.clone();
         update(&mut config)?;
         config.validate()?;
-        if config.rules != previous {
+        if config.rules != previous || config.resolution != previous_resolution {
             config.rules_revision = config
                 .rules_revision
                 .checked_add(1)
@@ -228,9 +244,50 @@ impl ConfigStore {
             Ok(())
         })
     }
+
+    pub(crate) fn replace_routing(
+        &self,
+        rules: Vec<Rule>,
+        resolution: ResolutionSettings,
+        expected_revision: u64,
+    ) -> Result<Config> {
+        self.update(|config| {
+            if config.rules_revision != expected_revision {
+                bail!("其他窗口已修改规则或跳转设置。请先保留草稿，再载入已保存规则进行合并。");
+            }
+            config.rules = rules;
+            config.resolution = resolution;
+            Ok(())
+        })
+    }
 }
 
-// Legacy DTOs exist only at the migration boundary; all runtime decisions use Config v2.
+// Legacy DTOs exist only at the migration boundary; runtime decisions use Config v3.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionTwo {
+    version: u32,
+    names: BTreeMap<IdentityId, String>,
+    rules: Vec<Rule>,
+    rules_revision: u64,
+    always_ask: bool,
+    last_used: Vec<ProfileUse>,
+}
+
+impl VersionTwo {
+    fn migrate(self) -> Config {
+        debug_assert_eq!(self.version, 2);
+        Config {
+            names: self.names,
+            rules: self.rules,
+            rules_revision: self.rules_revision,
+            always_ask: self.always_ask,
+            last_used: self.last_used,
+            ..Config::default()
+        }
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct LegacyConfig {

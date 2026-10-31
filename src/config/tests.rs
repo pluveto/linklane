@@ -27,6 +27,59 @@ impl Fixture {
 }
 
 #[test]
+fn v2_upgrade_preserves_rules_and_backs_up_before_enabling_query_resolution() {
+    let fixture = Fixture::new();
+    let bytes = br#"{"version":2,"names":{"edge:Default":"Office"},"rules":[{"name":"Work","enabled":true,"all":[{"kind":"origin","value":"https://example.com"}],"action":{"kind":"open","identity":"edge:Default"}}],"rules_revision":7,"always_ask":false,"last_used":[{"id":"edge:Default","at":1000}]}"#;
+    fs::write(fixture.path(), bytes).unwrap();
+    let migrated = fixture.store().load().unwrap();
+    assert_eq!(migrated.version, 3);
+    assert_eq!(migrated.rules_revision, 7);
+    assert_eq!(
+        migrated.names[&IdentityId::new("edge", "Default").unwrap()],
+        "Office"
+    );
+    assert_eq!(
+        fs::read(fixture.directory.path().join("settings.v2.backup.json")).unwrap(),
+        bytes
+    );
+    let profiles = [Profile::preview(BrowserFamily::Edge, "Default", "Office").unwrap()];
+    let resolved = migrated.resolution.resolve(
+        &url::Url::parse("https://wrap.test/?url=https%3A%2F%2Fexample.com%2Fproject").unwrap(),
+    );
+    assert_eq!(
+        resolved
+            .decide(
+                &RuleSet::compile(&migrated.rules).unwrap(),
+                &profiles,
+                false
+            )
+            .identity,
+        Some(profiles[0].id.clone())
+    );
+    let mut changed = migrated.resolution.clone();
+    changed.parameters.clear();
+    fixture
+        .store()
+        .replace_routing(migrated.rules.clone(), changed, migrated.rules_revision)
+        .unwrap();
+    assert!(
+        fixture
+            .store()
+            .replace_routing(migrated.rules, migrated.resolution, migrated.rules_revision)
+            .is_err()
+    );
+    assert!(
+        fixture
+            .store()
+            .load()
+            .unwrap()
+            .resolution
+            .parameters
+            .is_empty()
+    );
+}
+
+#[test]
 fn browser_recency_and_user_names_stay_independent_across_restarts() {
     let fixture = Fixture::new();
     let mut chrome = Profile::preview(BrowserFamily::Chrome, "Default", "Work").unwrap();

@@ -15,15 +15,18 @@ A compact Windows link chooser with browser identities and explainable routing r
 - **高级规则**：底部进入 JSON 编辑器，按域名及子域、协议、端口范围、路径、查询参数或完整网址匹配；支持通配符、正则、全部／任一条件与排除条件。
 - **明确优先级**：第一条命中决定打开身份或询问。“每次都让我选”可暂停自动打开；目标身份暂不可用时显示原因并交回选择器。
 - **先测试再应用**：草稿测试显示逐条匹配原因，应用时校验。多个窗口修改同一份规则会提示冲突，保留草稿供合并。
+- **识别 query 跳转目标**：从 `url`、`target` 等参数逐层解析目标，按目标选择身份，实际打开保留原链接的中转流程。支持自定义参数名和域名例外；选择器显示目标，“测试草稿”展示完整解析链。
 - **本地运行**：仅读取浏览器身份元数据。自动记住网站仅保存来源；手动规则保存用户填写的条件；测试网址仅留在当前窗口。退出窗口后结束进程。
 
 详细语法与示例见 [高级规则说明](docs/RULES.md)，应用内“示例与身份标识”同时列出本机可复制的身份标识。
 
 ![高级规则与测试](docs/images/advanced-rules.png)
 
+![Query 跳转目标预览](docs/images/query-target.png)
+
 ## 安装与使用
 
-公开发布包见 [GitHub Releases](https://github.com/pluveto/linklane/releases/latest)。当前源码版本为 **0.2.0**；本地打包产物为 `linklane-v0.2.0-windows-x86_64.zip`，包含程序、文档、许可证与卸载脚本。
+公开发布包见 [GitHub Releases](https://github.com/pluveto/linklane/releases/latest)。当前源码版本为 **0.3.0**；本地打包产物为 `linklane-v0.3.0-windows-x86_64.zip`，包含程序、文档、许可证与卸载脚本。
 
 1. 解压并运行 `linklane.exe`。
 2. 点击“开始使用”，安装至 `%LOCALAPPDATA%/Linklane/bin` 并完成系统注册。设置位于 `%LOCALAPPDATA%/Linklane/settings.json`。
@@ -40,9 +43,9 @@ A compact Windows link chooser with browser identities and explainable routing r
 
 ## 升级与回滚
 
-首次读取 v0.1 设置时，程序先逐字节备份为 `settings.v1.backup.json`，再原子写入 v2 配置。旧身份转为 `chrome:…`，网站转为精确来源规则，自定义名称与最近使用记录一并保留。校验或写入失败会显示错误并保留原文件。
+首次读取旧设置时，程序先逐字节备份，再原子写入当前 v3 配置。v0.1 的无版本配置备份为 `settings.v1.backup.json`，v0.2 的 v2 配置备份为 `settings.v2.backup.json`。旧 Chrome 身份、网站、规则、自定义名称与最近使用记录一并保留，并加入 query 解析设置。校验或写入失败会显示错误并保留原文件。
 
-回滚到旧版时：关闭所有轻舟窗口，另存当前 `settings.json`，恢复旧程序，并把 `settings.v1.backup.json` 复制为 `settings.json`。该步骤恢复升级时的数据；升级后添加的规则保存在另存的 v2 文件中。
+回滚时：关闭所有轻舟窗口，另存当前 `settings.json`，恢复对应旧程序；回到 v0.2 时把 `settings.v2.backup.json` 复制为 `settings.json`，回到 v0.1 使用 `settings.v1.backup.json`。该步骤恢复升级时的数据；升级后添加的规则保存在另存的 v3 文件中。
 
 ## 卸载
 
@@ -60,7 +63,7 @@ cargo run -- --dry-run https://example.com
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-./scripts/package.ps1 -Tag v0.2.0
+./scripts/package.ps1 -Tag v0.3.0
 ```
 
 `--demo` 使用内存中的演示身份与规则。`--dry-run`、`--explain` 只输出决策；`--choose URL` 强制显示选择器。`LINKLANE_HOME` 可指定独立的测试设置目录。Slint MCP 界面检查用 `--features slint/mcp` 单独构建，正式包省略此功能。

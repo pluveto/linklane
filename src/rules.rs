@@ -235,6 +235,7 @@ pub(crate) struct RuleSet(Vec<PreparedRule>);
 pub(crate) struct Decision {
     pub(crate) identity: Option<IdentityId>,
     pub(crate) explanation: String,
+    pub(crate) notice: Option<String>,
 }
 
 impl RuleSet {
@@ -276,6 +277,7 @@ impl RuleSet {
             return Decision {
                 identity: None,
                 explanation: "已开启“每次都让我选”，本次显示身份选择器。".into(),
+                notice: None,
             };
         }
         for (index, prepared) in self.0.iter().enumerate() {
@@ -307,6 +309,7 @@ impl RuleSet {
                 trace.push(format!("{label}：被 exclude 第 {} 项排除", excluded + 1));
                 continue;
             }
+            let mut notice = None;
             let identity = match &rule.action {
                 RuleAction::Ask => {
                     trace.push(format!("{label}：首条命中 → 每次询问"));
@@ -320,6 +323,10 @@ impl RuleSet {
                         ));
                         Some(identity.clone())
                     } else {
+                        notice = Some(format!(
+                            "规则“{}”的目标身份暂不可用，请重新选择。",
+                            rule.name
+                        ));
                         trace.push(format!(
                             "{label}：首条命中，但身份 {identity} 暂不可用 → 请重新选择"
                         ));
@@ -330,12 +337,14 @@ impl RuleSet {
             return Decision {
                 identity,
                 explanation: trace.join("\n"),
+                notice,
             };
         }
         trace.push("其余规则均未命中 → 显示身份选择器".into());
         Decision {
             identity: None,
             explanation: trace.join("\n"),
+            notice: None,
         }
     }
 }
