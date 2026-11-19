@@ -20,7 +20,7 @@ pub(crate) fn site_key(url: &Url) -> String {
 
 pub(crate) fn app_home() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("LINKLANE_HOME") {
-        return Ok(path.into());
+        return Ok(std::path::absolute(path)?);
     }
     Ok(dirs::data_local_dir()
         .context("找不到此电脑的用户文件夹")?
@@ -36,7 +36,15 @@ pub(crate) fn install_and_register() -> Result<()> {
     let exe = bin.join("linklane.exe");
     let current = std::env::current_exe()?;
     if !exe.exists() || fs::canonicalize(&current)? != fs::canonicalize(&exe)? {
-        fs::copy(&current, &exe).context("无法安装更新。请关闭其他轻舟窗口后再试")?;
+        let cli = current.with_file_name("linklane-cli.exe");
+        for (source, destination) in [(current, exe.clone()), (cli, bin.join("linklane-cli.exe"))] {
+            if source.try_exists()? {
+                let mut temp = tempfile::NamedTempFile::new_in(&bin)?;
+                std::io::copy(&mut fs::File::open(source)?, &mut temp)?;
+                temp.persist(destination)
+                    .context("无法安装更新。请关闭其他轻舟窗口后再试")?;
+            }
+        }
     }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let cap_path = "Software\\Clients\\StartMenuInternet\\Linklane\\Capabilities";

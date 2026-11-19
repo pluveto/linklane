@@ -1,0 +1,42 @@
+# 轻舟 Linklane · 网站设置 / Routing settings
+# 编辑本文件后，回到轻舟点“从文件重新加载”，或运行 linklane-cli rules reload。
+# 也可编辑副本：linklane-cli rules check <文件> 校验，rules replace <文件> 应用。
+# rules replace - 从标准输入接收 UTF-8。校验失败会返回错误并保留上次生效的设置。
+# linklane-cli rules identities 列出本机身份标识；rules explain <网址> 查看匹配过程。
+#
+# 从上往下，采用第一条命中的设置。name 必须唯一，enabled 控制启用。
+# all 必须全部满足；any 非空时至少满足一项；命中任一 exclude 会跳过该条。
+# all、any 至少有一种条件。动作是 { kind = "ask" } 或
+# { kind = "open", identity = "chrome:Default" }。请用本机列出的身份标识。
+#
+# 添加 [[rules]] 时，先删除空文件中的 `rules = []`。最小示例（取消行首 #）：
+# [[rules]]
+# name = "工作网站"
+# enabled = true
+# all = [{ kind = "host", value = "example.com", subdomains = true }]
+# any = [{ kind = "scheme", value = "https" }]
+# exclude = [{ kind = "pathPrefix", value = "/personal" }]
+# action = { kind = "open", identity = "chrome:Default" }
+#
+# 下列各行都是可以放进 all、any 或 exclude 的条件：
+# { kind = "origin", value = "https://example.com" }   精确协议、域名、端口；省略末尾 / 与默认端口
+# { kind = "host", value = "example.com", subdomains = true }   根域及子域；省略 subdomains 则只匹配根域
+# { kind = "scheme", value = "http" }   http 或 https
+# { kind = "port", min = 3000, max = 3999 }   含端点；默认端口 http=80、https=443
+# { kind = "pathPrefix", value = "/acme" }   按路径段，匹配 /acme/project
+# { kind = "path", pattern = { kind = "glob", value = "/acme/**" } }   匹配百分号编码后的路径
+# { kind = "url", pattern = { kind = "regex", value = '^https://example\.com/' } }   匹配规范化完整网址
+# { kind = "query", key = "preview" }   查询参数存在
+# { kind = "query", key = "team", value = { kind = "exact", value = "work" } }   匹配解码后的任一同名参数
+# exact、glob、regex 可用于 path、url、query。路径中 * 匹配单段，** 可跨段；? 匹配单字符。
+# 正则默认区分大小写；用 ^ 和 $ 锚定，用 (?i) 忽略大小写。建议用 TOML 单引号保留反斜线。
+#
+# 可选：修改文件中已有的 [resolution]。parameters 是跳转网址的查询参数名，省略整个
+# [resolution] 会使用默认值。[[resolution.sites]] 按顺序匹配域名，第一项覆盖默认参数。
+# 对应网站使用空列表可关闭解析；默认和网站列表都为空时，全局关闭。打开时保留原链接。
+# [resolution]
+# parameters = ["url", "target", "redirect_url"]
+# [[resolution.sites]]
+# host = "go.example.com"
+# subdomains = true
+# parameters = ["to"]

@@ -1,50 +1,72 @@
 // RATIONALE: bind wires Slint callbacks; rule validation, matching and persistence belong to their owners.
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
 use slint::ComponentHandle;
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    MainWindow, State,
-    config::ConfigStore,
-    resolution::ResolutionSettings,
-    routing::parse_link,
-    rules::{Rule, RuleSet},
+    MainWindow, State, config::ConfigStore, routing::parse_link, rule_document::RuleDocument,
+    rules::RuleSet,
 };
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RuleDocument {
-    rules: Vec<Rule>,
-    #[serde(default)]
-    resolution: ResolutionSettings,
-}
-
-impl RuleDocument {
-    fn read(text: &str) -> Result<Self> {
-        let document: Self = serde_json::from_str(text).context("规则 JSON 无效")?;
-        RuleSet::compile(&document.rules)?;
-        document.resolution.validate()?;
-        Ok(document)
-    }
-}
-
 pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
-    let revision = Rc::new(Cell::new(state.borrow().config.rules_revision));
-    ui.set_rules_draft(
-        serde_json::to_string_pretty(&RuleDocument {
-            rules: state.borrow().config.rules.clone(),
-            resolution: state.borrow().config.resolution.clone(),
-        })?
-        .into(),
-    );
+    let store = ConfigStore::at(&state.borrow().home);
+    let path = store.rules_path();
+    ui.set_rules_path(if state.borrow().demo {
+        r"C:\Users\Demo\AppData\Local\Linklane\rules.toml".into()
+    } else {
+        path.display().to_string().into()
+    });
+    ui.set_can_copy_rules_path(!state.borrow().demo);
+    if state.borrow().config.routing_text.is_empty() {
+        state.borrow_mut().config.routing_text = RuleDocument::default().encode()?;
+    }
+    ui.set_rules_draft(state.borrow().config.routing_text.as_str().into());
+    let editing_base = Rc::new(RefCell::new(state.borrow().config.routing_text.clone()));
+    ui.on_copy_rules_path({
+        let weak = ui.as_weak();
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            #[cfg(windows)]
+            let result = arboard::Clipboard::new()
+                .and_then(|mut clipboard| clipboard.set_text(path.display().to_string()));
+            #[cfg(not(windows))]
+            let result: Result<()> = Err(anyhow::anyhow!("请从地址栏选择并复制路径"));
+            ui.set_rules_status(match result {
+                Ok(()) => "路径已复制，可粘贴给 AI。".into(),
+                Err(error) => format!("复制失败：{error}。你也可以选中路径后复制。").into(),
+            });
+        }
+    });
+    ui.on_enter_rules({
+        let weak = ui.as_weak();
+        let state = state.clone();
+        let editing_base = editing_base.clone();
+        move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            if !ui.get_rules_dirty() {
+                let mut state = state.borrow_mut();
+                if !state.demo {
+                    match ConfigStore::at(&state.home).load() {
+                        Ok(config) => state.config = config,
+                        Err(error) => {
+                            ui.set_rules_status(format!("读取生效设置失败：{error:#}").into())
+                        }
+                    }
+                }
+                *editing_base.borrow_mut() = state.config.routing_text.clone();
+                ui.set_rules_draft(state.config.routing_text.as_str().into());
+                crate::render(&ui, &mut state);
+            }
+        }
+    });
     ui.on_reload_rules({
         let weak = ui.as_weak();
         let state = state.clone();
-        let revision = revision.clone();
+        let editing_base = editing_base.clone();
         move || {
             let Some(ui) = weak.upgrade() else {
                 return;
@@ -52,52 +74,50 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
             let result = (|| -> Result<()> {
                 let mut state = state.borrow_mut();
                 if !state.demo {
-                    state.config = ConfigStore::at(&state.home).load()?;
+                    let store = ConfigStore::at(&state.home);
+                    state.config = store.reload_rules()?;
                 }
-                let text = serde_json::to_string_pretty(&RuleDocument {
-                    rules: state.config.rules.clone(),
-                    resolution: state.config.resolution.clone(),
-                })?;
-                ui.set_rules_draft(text.into());
+                ui.set_rules_draft(state.config.routing_text.as_str().into());
                 ui.set_rules_dirty(false);
-                revision.set(state.config.rules_revision);
+                ui.set_test_result("".into());
+                *editing_base.borrow_mut() = state.config.routing_text.clone();
                 crate::render(&ui, &mut state);
                 Ok(())
             })();
-            ui.set_message(match result {
-                Ok(()) => "已载入保存的规则。".into(),
-                Err(error) => format!("{error:#}").into(),
+            ui.set_rules_status(match result {
+                Ok(()) => "已从文件加载，后续链接将使用这份设置。".into(),
+                Err(error) => format!("重载失败，仍使用上次生效的设置。\n{error:#}").into(),
             });
         }
     });
     ui.on_apply_rules({
         let weak = ui.as_weak();
         let state = state.clone();
-        let revision = revision.clone();
+        let editing_base = editing_base.clone();
         move || {
             let Some(ui) = weak.upgrade() else {
                 return;
             };
             let result = (|| -> Result<()> {
-                let document = RuleDocument::read(ui.get_rules_draft().as_str())?;
+                let text = ui.get_rules_draft();
                 let mut state = state.borrow_mut();
                 if state.demo {
+                    let document = RuleDocument::parse(text.as_str())?;
                     state.config.rules = document.rules;
                     state.config.resolution = document.resolution;
+                    state.config.routing_text = RuleDocument::with_guide(text.as_str());
                 } else {
-                    state.config = ConfigStore::at(&state.home).replace_routing(
-                        document.rules,
-                        document.resolution,
-                        revision.get(),
-                    )?;
+                    state.config = ConfigStore::at(&state.home)
+                        .replace_document(text.as_str(), Some(&editing_base.borrow()))?;
                 }
-                revision.set(state.config.rules_revision);
+                *editing_base.borrow_mut() = state.config.routing_text.clone();
+                ui.set_rules_draft(state.config.routing_text.as_str().into());
                 ui.set_rules_dirty(false);
                 crate::render(&ui, &mut state);
                 Ok(())
             })();
-            ui.set_message(match result {
-                Ok(()) => "规则已应用，后续链接将按此顺序匹配。".into(),
+            ui.set_rules_status(match result {
+                Ok(()) => "设置已应用，后续链接将按此顺序匹配。".into(),
                 Err(error) => format!("{error:#}；草稿已保留。更新规则前请先修正错误。").into(),
             });
         }
@@ -110,7 +130,7 @@ pub(crate) fn bind(ui: &MainWindow, state: Rc<RefCell<State>>) -> Result<()> {
                 return;
             };
             let result = (|| -> Result<String> {
-                let document = RuleDocument::read(ui.get_rules_draft().as_str())?;
+                let document = RuleDocument::parse(ui.get_rules_draft().as_str())?;
                 let url = parse_link(ui.get_test_url().as_str())?;
                 let state = state.borrow();
                 Ok(document

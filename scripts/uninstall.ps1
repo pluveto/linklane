@@ -10,6 +10,9 @@ Remove-ItemProperty -LiteralPath 'HKCU:\Software\RegisteredApplications' -Name '
 foreach ($key in @('HKCU:\Software\Classes\Linklane.Url', 'HKCU:\Software\Clients\StartMenuInternet\Linklane')) {
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse }
 }
-$installedExe = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Linklane\bin\linklane.exe'
-if (Test-Path -LiteralPath $installedExe) { Remove-Item -LiteralPath $installedExe }
+$bin = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Linklane\bin'
+foreach ($name in 'linklane.exe', 'linklane-cli.exe') {
+    $installedExe = Join-Path $bin $name
+    if (Test-Path -LiteralPath $installedExe) { Remove-Item -LiteralPath $installedExe }
+}
 Write-Output '轻舟已移除。已保存的网站选择仍保留在用户文件夹中。'

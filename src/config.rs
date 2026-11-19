@@ -9,23 +9,19 @@ use std::{
 use time::OffsetDateTime;
 
 use crate::{
-    browsers::Profile,
-    identity::IdentityId,
-    resolution::ResolutionSettings,
-    rules::{Rule, RuleSet},
+    browsers::Profile, identity::IdentityId, resolution::ResolutionSettings,
+    rule_document::RuleDocument, rules::Rule,
 };
 
 #[non_exhaustive]
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub(crate) struct Config {
-    pub(crate) version: u32,
-    pub(crate) names: BTreeMap<IdentityId, String>,
     pub(crate) rules: Vec<Rule>,
     pub(crate) resolution: ResolutionSettings,
-    pub(crate) rules_revision: u64,
+    pub(crate) names: BTreeMap<IdentityId, String>,
     pub(crate) always_ask: bool,
     pub(crate) last_used: Vec<ProfileUse>,
+    pub(crate) routing_text: String,
 }
 
 #[non_exhaustive]
@@ -35,20 +31,6 @@ pub(crate) struct ProfileUse {
     pub(crate) id: IdentityId,
     #[serde(with = "time::serde::timestamp::milliseconds")]
     pub(crate) at: OffsetDateTime,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            version: 3,
-            names: BTreeMap::new(),
-            rules: vec![],
-            resolution: ResolutionSettings::default(),
-            rules_revision: 0,
-            always_ask: false,
-            last_used: vec![],
-        }
-    }
 }
 
 impl Config {
@@ -102,15 +84,7 @@ impl Config {
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
-        if self.version != 3 {
-            bail!(
-                "设置版本 {} 尚无迁移路径，请使用对应版本的轻舟",
-                self.version
-            );
-        }
-        RuleSet::compile(&self.rules)?;
-        self.resolution.validate()?;
+    fn validate_preferences(&self) -> Result<()> {
         if self
             .names
             .values()
@@ -155,186 +129,182 @@ impl ConfigStore {
         self.read_locked()
     }
 
+    pub(crate) fn rules_path(&self) -> PathBuf {
+        self.home.join("rules.toml")
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.home.join("settings.toml")
+    }
+
     fn read_locked(&self) -> Result<Config> {
-        let bytes = match fs::read(self.home.join("settings.json")) {
-            Ok(bytes) => bytes,
+        let text = match fs::read_to_string(self.state_path()) {
+            Ok(text) => text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Config::default());
-            }
-            Err(error) => return Err(error).context("读取设置失败"),
-        };
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).context("设置 JSON 无效；原文件已保留")?;
-        let (config, previous_version) = match value.get("version") {
-            Some(version) if version == 3 => {
-                let config: Config =
-                    serde_json::from_value(value).context("设置字段无效；原文件已保留")?;
-                config.validate()?;
+                let config = Config {
+                    routing_text: RuleDocument::default().encode()?,
+                    ..Config::default()
+                };
+                let path = self.rules_path();
+                if !path.try_exists()? {
+                    self.write_atomic(&path, config.routing_text.as_bytes())?;
+                }
+                self.write_state(&config)?;
                 return Ok(config);
             }
-            Some(version) if version == 2 => {
-                let legacy: VersionTwo =
-                    serde_json::from_value(value).context("v2 设置字段无效；原文件已保留")?;
-                (legacy.migrate(), 2)
-            }
-            None => {
-                let legacy: LegacyConfig =
-                    serde_json::from_value(value).context("旧版设置无效；原文件已保留")?;
-                (legacy.migrate()?, 1)
-            }
-            Some(version) => bail!("设置版本 {version} 尚无迁移路径；原文件已保留"),
+            Err(error) => return Err(error).context("读取轻舟设置失败"),
         };
-        config.validate()?;
-        let backup_name = format!("settings.v{previous_version}.backup.json");
-        let backup = self.home.join(&backup_name);
-        match fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&backup)
-        {
-            Ok(mut file) => {
-                file.write_all(&bytes)?;
-                file.sync_all()?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if fs::read(&backup)? != bytes {
-                    bail!(
-                        "已有不同的旧版备份，请先将 {backup_name} 移到备份目录后重试；当前设置已保留"
-                    );
-                }
-            }
-            Err(error) => return Err(error).context("创建升级备份失败"),
-        }
-        self.write_locked(&config)
-            .context("迁移保存失败；可继续使用旧版设置")?;
+        let saved: StateFile<String, BTreeMap<IdentityId, String>, Vec<ProfileUse>> =
+            toml::from_str(&text).context("轻舟设置文件有误")?;
+        let document =
+            RuleDocument::parse(&saved.active_rules).context("上次生效的网站设置有误")?;
+        let config = Config {
+            rules: document.rules,
+            resolution: document.resolution,
+            names: saved.names,
+            always_ask: saved.always_ask,
+            last_used: saved.last_used,
+            routing_text: saved.active_rules,
+        };
+        config.validate_preferences()?;
         Ok(config)
     }
 
-    fn write_locked(&self, config: &Config) -> Result<()> {
+    fn write_atomic(&self, path: &Path, data: &[u8]) -> Result<()> {
         let mut temp = tempfile::NamedTempFile::new_in(&self.home)?;
-        temp.write_all(&serde_json::to_vec_pretty(config)?)?;
+        temp.write_all(data)?;
         temp.as_file().sync_all()?;
-        temp.persist(self.home.join("settings.json"))?;
+        temp.persist(path)?;
         Ok(())
+    }
+
+    fn write_state(&self, config: &Config) -> Result<()> {
+        let saved = StateFile {
+            active_rules: config.routing_text.as_str(),
+            names: &config.names,
+            always_ask: config.always_ask,
+            last_used: &config.last_used,
+        };
+        self.write_atomic(&self.state_path(), toml::to_string(&saved)?.as_bytes())
+            .context("保存轻舟设置失败")
+    }
+
+    fn read_source(&self) -> Result<Option<Vec<u8>>> {
+        match fs::read(self.rules_path()) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).context("读取网站设置文件失败"),
+        }
+    }
+
+    fn publish(&self, config: &Config, previous_source: Option<&[u8]>) -> Result<()> {
+        let path = self.rules_path();
+        let next = config.routing_text.as_bytes();
+        let source_changed = previous_source != Some(next);
+        if source_changed {
+            self.write_atomic(&path, next)
+                .context("写入网站设置文件失败")?;
+        }
+        if let Err(error) = self.write_state(config) {
+            if source_changed {
+                let rollback = match previous_source {
+                    Some(previous) => self.write_atomic(&path, previous),
+                    None => fs::remove_file(path).map_err(Into::into),
+                };
+                if let Err(rollback_error) = rollback {
+                    return Err(error).context(format!(
+                        "已保留生效设置；无法恢复磁盘草稿：{rollback_error:#}"
+                    ));
+                }
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reload_rules(&self) -> Result<Config> {
+        let _lock = self.lock()?;
+        let mut config = self.read_locked()?;
+        let bytes = self.read_source()?.context("找不到网站设置文件")?;
+        let text = std::str::from_utf8(&bytes).context("网站设置文件需使用 UTF-8 编码")?;
+        let document = RuleDocument::parse(text)?;
+        config.set_document(document, text);
+        self.publish(&config, Some(&bytes))?;
+        Ok(config)
+    }
+
+    pub(crate) fn replace_document(&self, text: &str, expected: Option<&str>) -> Result<Config> {
+        let document = RuleDocument::parse(text)?;
+        let _lock = self.lock()?;
+        let mut config = self.read_locked()?;
+        let source = self.read_source()?;
+        if let Some(expected) = expected {
+            config.check_current(expected, source.as_deref())?;
+        }
+        config.set_document(document, text);
+        self.publish(&config, source.as_deref())?;
+        Ok(config)
     }
 
     pub(crate) fn update(&self, update: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
         let _lock = self.lock()?;
         let mut config = self.read_locked()?;
         let previous = config.rules.clone();
-        let previous_resolution = config.resolution.clone();
         update(&mut config)?;
-        config.validate()?;
-        if config.rules != previous || config.resolution != previous_resolution {
-            config.rules_revision = config
-                .rules_revision
-                .checked_add(1)
-                .context("规则版本已达到上限")?;
-        }
-        self.write_locked(&config)?;
-        Ok(config)
+        self.write_update(config, &previous)
     }
 
-    pub(crate) fn replace_rules(&self, rules: Vec<Rule>, expected_revision: u64) -> Result<Config> {
-        self.update(|config| {
-            if config.rules_revision != expected_revision {
-                bail!("其他窗口已修改规则。请先保留当前草稿，再载入已保存规则进行合并。");
-            }
-            config.rules = rules;
-            Ok(())
-        })
+    pub(crate) fn forget(&self, index: usize, expected: &str) -> Result<Config> {
+        let _lock = self.lock()?;
+        let mut config = self.read_locked()?;
+        let source = self.read_source()?;
+        config.check_current(expected, source.as_deref())?;
+        let previous = config.rules.clone();
+        if index >= config.rules.len() {
+            bail!("找不到要移除的网站设置");
+        }
+        config.rules.remove(index);
+        self.write_update(config, &previous)
     }
 
-    pub(crate) fn replace_routing(
-        &self,
-        rules: Vec<Rule>,
-        resolution: ResolutionSettings,
-        expected_revision: u64,
-    ) -> Result<Config> {
-        self.update(|config| {
-            if config.rules_revision != expected_revision {
-                bail!("其他窗口已修改规则或跳转设置。请先保留草稿，再载入已保存规则进行合并。");
-            }
-            config.rules = rules;
-            config.resolution = resolution;
-            Ok(())
-        })
-    }
-}
-
-// Legacy DTOs exist only at the migration boundary; runtime decisions use Config v3.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VersionTwo {
-    version: u32,
-    names: BTreeMap<IdentityId, String>,
-    rules: Vec<Rule>,
-    rules_revision: u64,
-    always_ask: bool,
-    last_used: Vec<ProfileUse>,
-}
-
-impl VersionTwo {
-    fn migrate(self) -> Config {
-        debug_assert_eq!(self.version, 2);
-        Config {
-            names: self.names,
-            rules: self.rules,
-            rules_revision: self.rules_revision,
-            always_ask: self.always_ask,
-            last_used: self.last_used,
-            ..Config::default()
-        }
-    }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct LegacyConfig {
-    names: BTreeMap<String, String>,
-    sites: Vec<LegacySite>,
-    always_ask: bool,
-    last_used: Vec<LegacyUse>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacySite {
-    site: String,
-    profile: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyUse {
-    id: String,
-    #[serde(with = "time::serde::timestamp::milliseconds")]
-    at: OffsetDateTime,
-}
-
-impl LegacyConfig {
-    fn migrate(self) -> Result<Config> {
-        let mut config = Config {
-            always_ask: self.always_ask,
-            ..Config::default()
-        };
-        for (id, name) in self.names {
-            config.names.insert(IdentityId::new("chrome", &id)?, name);
-        }
-        for site in self.sites {
-            config.rules.push(Rule::remembered(
-                site.site,
-                IdentityId::new("chrome", &site.profile)?,
-            ));
-        }
-        for entry in self.last_used {
-            config.last_used.push(ProfileUse {
-                id: IdentityId::new("chrome", &entry.id)?,
-                at: entry.at,
-            });
+    fn write_update(&self, mut config: Config, previous: &[Rule]) -> Result<Config> {
+        config.validate_preferences()?;
+        if config.rules == previous {
+            self.write_state(&config)?;
+        } else {
+            let source = self.read_source()?;
+            config.check_current(&config.routing_text, source.as_deref())?;
+            let text = RuleDocument::update_rules(&config.routing_text, previous, &config.rules)?;
+            let document = RuleDocument::parse(&text)?;
+            config.set_document(document, &text);
+            self.publish(&config, source.as_deref())?;
         }
         Ok(config)
     }
+}
+
+impl Config {
+    fn set_document(&mut self, document: RuleDocument, text: &str) {
+        self.rules = document.rules;
+        self.resolution = document.resolution;
+        self.routing_text = RuleDocument::with_guide(text);
+    }
+
+    fn check_current(&self, expected: &str, source: Option<&[u8]>) -> Result<()> {
+        if self.routing_text != expected || source != Some(expected.as_bytes()) {
+            bail!("网站设置文件已有改动。请先从文件重新加载，再应用当前改动。");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StateFile<Text, Names, Uses> {
+    active_rules: Text,
+    names: Names,
+    always_ask: bool,
+    last_used: Uses,
 }
 
 #[cfg(test)]

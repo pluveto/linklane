@@ -13,6 +13,7 @@ use crate::{browsers::Profile, identity::IdentityId};
 pub(crate) struct Rule {
     pub(crate) name: String,
     pub(crate) enabled: bool,
+    #[serde(default)]
     pub(crate) all: Vec<Condition>,
     #[serde(default)]
     pub(crate) any: Vec<Condition>,

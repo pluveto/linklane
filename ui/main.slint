@@ -75,12 +75,17 @@ export component MainWindow inherits Window {
     callback resize-window(length, length);
     changed page => { root.resize-window(root.width, root.height); }
     in-out property <string> rules-draft;
+    in property <string> rules-path;
+    in property <bool> can-copy-rules-path;
+    in property <string> rules-status;
     in-out property <bool> rules-dirty: false;
     in-out property <string> test-url;
     in property <string> test-result;
     in property <string> help-text;
     in-out property <bool> show-help: false;
     callback reload-rules();
+    callback enter-rules();
+    callback copy-rules-path();
     callback apply-rules();
     callback test-rules();
     callback rules-help();
@@ -212,15 +217,20 @@ export component MainWindow inherits Window {
                 }
                 if root.page == 3 : VerticalLayout {
                     spacing: 10px;
-                    Text { text: root.show-help ? "规则说明与身份标识" : "高级规则"; color: Theme.ink; font-size: 19px; font-weight: 600; }
+                    Text { text: root.show-help ? "写法与身份标识" : "网站设置"; color: Theme.ink; font-size: 19px; font-weight: 600; }
                     if root.show-help : TextEdit { text: root.help-text; read-only: true; font-size: 12px; vertical-stretch: 1; accessible-label: "规则说明"; }
                     if !root.show-help : VerticalLayout {
                         spacing: 8px;
-                        Text { text: "从上到下匹配。测试草稿后，点击“校验并应用”生效。"; color: Theme.muted; font-size: 12px; }
-                        rules-editor := TextEdit { text <=> root.rules-draft; wrap: no-wrap; font-size: 12px; vertical-stretch: 1; accessible-label: "规则 JSON"; edited => { root.rules-dirty = true; } }
+                        Text { text: "网站设置文件 · 可复制路径给 AI"; color: Theme.muted; font-size: 12px; }
                         HorizontalLayout {
                             spacing: 8px;
-                            reload-rules-button := Button { text: root.rules-dirty ? "重新载入（舍弃草稿）" : "重新载入"; clicked => { root.reload-rules(); } }
+                            rules-path-field := LineEdit { text: root.rules-path; read-only: true; horizontal-stretch: 1; accessible-label: "网站设置文件路径"; }
+                            copy-rules-path-button := Button { text: "复制路径"; enabled: root.can-copy-rules-path; clicked => { root.copy-rules-path(); } }
+                        }
+                        rules-editor := TextEdit { text <=> root.rules-draft; wrap: no-wrap; font-size: 12px; vertical-stretch: 1; accessible-label: "网站设置内容"; edited => { root.rules-dirty = true; } }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            reload-rules-button := Button { text: root.rules-dirty ? "从文件重新加载（替换草稿）" : "从文件重新加载"; clicked => { root.reload-rules(); } }
                             Button { text: "示例与身份标识"; clicked => { root.rules-help(); } }
                             Rectangle { horizontal-stretch: 1; }
                             apply-rules-button := Button { text: "校验并应用"; clicked => { root.apply-rules(); } }
@@ -231,6 +241,7 @@ export component MainWindow inherits Window {
                             test-rules-button := Button { text: "测试草稿"; clicked => { root.test-rules(); } }
                         }
                         test-result-view := TextEdit { text: root.test-result; read-only: true; height: 112px; font-size: 12px; accessible-label: "匹配结果"; }
+                        if root.rules-status != "" : TextEdit { text: root.rules-status; read-only: true; height: 72px; font-size: 12px; accessible-label: "网站设置操作结果"; }
                     }
                     if root.show-help : Button { text: "‹ 返回编辑"; clicked => { root.show-help = false; } }
                 }
@@ -240,7 +251,7 @@ export component MainWindow inherits Window {
                     height: 30px; spacing: 2px;
                     Action { text: root.page == 0 ? "已记住的网站" : "‹ 返回"; width: root.page == 0 ? 100px : 60px; clicked => { root.page = root.page == 0 ? 1 : 0; root.message = ""; } }
                     Action { text: "我的身份"; width: 72px; selected: root.page == 2; clicked => { root.page = 2; } }
-                    advanced-button := Action { text: "高级规则"; width: 72px; selected: root.page == 3; clicked => { if !root.rules-dirty { root.reload-rules(); } root.page = 3; root.show-help = false; } }
+                    advanced-button := Action { text: "网站设置"; width: 72px; selected: root.page == 3; clicked => { root.enter-rules(); root.page = 3; root.show-help = false; } }
                     Rectangle { horizontal-stretch: 1; }
                     Action { text: root.connected ? "已启用" : "开始使用"; width: 72px; clicked => { root.connect(); } }
                 }

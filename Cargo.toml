@@ -1,11 +1,12 @@
 [package]
 name = "linklane"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Route links to browser identities with explainable rules"
 license = "GPL-3.0-only"
 repository = "https://github.com/pluveto/linklane"
 rust-version = "1.96"
+default-run = "linklane"
 
 [dependencies]
 anyhow = "1"
@@ -22,9 +23,12 @@ regex = "1"
 globset = "0.4"
 configparser = "3"
 percent-encoding = "2"
+toml = "1.1"
+toml_edit = "0.25"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+arboard = { version = "3.7", default-features = false }
 
 [build-dependencies]
 slint-build = "=1.18.1"

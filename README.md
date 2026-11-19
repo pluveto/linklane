@@ -11,10 +11,10 @@ A compact Windows link chooser with browser identities and explainable routing r
 ## 功能
 
 - **多个浏览器，一张身份列表**：自动发现标准安装位置的 Chrome、Edge、Brave、Firefox 稳定版。每张卡片显示身份和浏览器，最近使用优先，支持独立重命名。
-- **记住网站**：勾选“下次也用这个身份打开此网站”，保存精确的协议、域名和有效端口。旧版已记住的网站继续生效。
-- **高级规则**：底部进入 JSON 编辑器，按域名及子域、协议、端口范围、路径、查询参数或完整网址匹配；支持通配符、正则、全部／任一条件与排除条件。
+- **记住网站**：勾选“下次也用这个身份打开此网站”，保存精确的协议、域名和有效端口。
+- **网站设置**：底部打开 TOML 编辑器，可以复制文件路径给 AI。支持按域名及子域、协议、端口范围、路径、查询参数或完整网址匹配。
 - **明确优先级**：第一条命中决定打开身份或询问。“每次都让我选”可暂停自动打开；目标身份暂不可用时显示原因并交回选择器。
-- **先测试再应用**：草稿测试显示逐条匹配原因，应用时校验。多个窗口修改同一份规则会提示冲突，保留草稿供合并。
+- **先测试再应用**：草稿测试显示逐条匹配原因。外部编辑后选择“从文件重新加载”，或通过 `linklane-cli` 校验并应用；遇到错误时继续使用上次生效的设置。
 - **识别 query 跳转目标**：从 `url`、`target` 等参数逐层解析目标，按目标选择身份，实际打开保留原链接的中转流程。支持自定义参数名和域名例外；选择器显示目标，“测试草稿”展示完整解析链。
 - **本地运行**：仅读取浏览器身份元数据。自动记住网站仅保存来源；手动规则保存用户填写的条件；测试网址仅留在当前窗口。退出窗口后结束进程。
 
@@ -26,10 +26,10 @@ A compact Windows link chooser with browser identities and explainable routing r
 
 ## 安装与使用
 
-公开发布包见 [GitHub Releases](https://github.com/pluveto/linklane/releases/latest)。当前源码版本为 **0.3.0**；本地打包产物为 `linklane-v0.3.0-windows-x86_64.zip`，包含程序、文档、许可证与卸载脚本。
+公开发布包见 [GitHub Releases](https://github.com/pluveto/linklane/releases/latest)。请下载 Windows x64 ZIP，里面包含主程序、命令行工具、文档、许可证与卸载脚本。
 
 1. 解压并运行 `linklane.exe`。
-2. 点击“开始使用”，安装至 `%LOCALAPPDATA%/Linklane/bin` 并完成系统注册。设置位于 `%LOCALAPPDATA%/Linklane/settings.json`。
+2. 点击“开始使用”，安装至 `%LOCALAPPDATA%/Linklane/bin` 并完成系统注册。可编辑的网站设置在 `%LOCALAPPDATA%/Linklane/rules.toml`。
 3. 在 Windows“默认应用”中搜索“轻舟 Linklane”，设为默认浏览器，关联 HTTP 与 HTTPS。
 
 运行需要 Windows x64；安装按当前用户进行。当前构建使用未签名可执行文件。更新采用手动替换安装。
@@ -43,9 +43,9 @@ A compact Windows link chooser with browser identities and explainable routing r
 
 ## 升级与回滚
 
-首次读取旧设置时，程序先逐字节备份，再原子写入当前 v3 配置。v0.1 的无版本配置备份为 `settings.v1.backup.json`，v0.2 的 v2 配置备份为 `settings.v2.backup.json`。旧 Chrome 身份、网站、规则、自定义名称与最近使用记录一并保留，并加入 query 解析设置。校验或写入失败会显示错误并保留原文件。
+关闭旧窗口，将新版 ZIP 完整解压，再运行新版主程序并点“开始使用”。v0.4 使用新的 TOML 文件；旧 `settings.json` 留在原处备份。需要沿用旧规则时，可参照新 `rules.toml` 顶部注释，把旧文件中的 `rules` 和 `resolution` 转写到 TOML 草稿，校验后应用。v0.1 的 `sites` 每项可改写为 `origin` 条件和 `open` 动作。
 
-回滚时：关闭所有轻舟窗口，另存当前 `settings.json`，恢复对应旧程序；回到 v0.2 时把 `settings.v2.backup.json` 复制为 `settings.json`，回到 v0.1 使用 `settings.v1.backup.json`。该步骤恢复升级时的数据；升级后添加的规则保存在另存的 v3 文件中。
+回滚时：关闭所有轻舟窗口，恢复对应旧程序及该版本的 `settings.json`。v0.4 的改动留在 TOML 文件中。
 
 ## 卸载
 
@@ -63,12 +63,12 @@ cargo run -- --dry-run https://example.com
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-./scripts/package.ps1 -Tag v0.3.0
+./scripts/package.ps1 -Tag v0.4.0
 ```
 
 `--demo` 使用内存中的演示身份与规则。`--dry-run`、`--explain` 只输出决策；`--choose URL` 强制显示选择器。`LINKLANE_HOME` 可指定独立的测试设置目录。Slint MCP 界面检查用 `--features slint/mcp` 单独构建，正式包省略此功能。
 
-测试覆盖多浏览器身份隔离、启动参数、组合条件、匹配边界、优先级、无效表达式、旧文件迁移与写入失败、并发保存和草稿冲突。CI 执行格式检查、Clippy、测试和构建；推送 `v*` 标签发布匹配版本的安装包。
+测试覆盖多浏览器身份隔离、组合条件、跳转解析、无效 TOML 回退、草稿冲突和并发保存。CI 执行格式检查、Clippy、测试以及命令行打包验证；推送 `v*` 标签发布匹配版本的安装包。
 
 ## 许可证
 

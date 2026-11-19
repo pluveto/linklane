@@ -9,7 +9,9 @@ mod config;
 mod identity;
 mod resolution;
 mod routing;
+mod rule_document;
 mod rules;
+mod rules_cli;
 use browsers::{BrowserCatalog, BrowserFamily, Profile};
 use config::{Config, ConfigStore};
 use routing::{
@@ -121,6 +123,18 @@ fn edit_config(state: &mut State, update: impl FnOnce(&mut Config)) -> Result<()
 }
 
 fn main() -> Result<()> {
+    let mut raw_args = std::env::args_os().skip(1);
+    let first = raw_args.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--install")) && raw_args.len() == 0 {
+        return install_and_register();
+    }
+    if first.as_deref() == Some(std::ffi::OsStr::new("--rules-cli")) {
+        if let Err(error) = rules_cli::run(raw_args.collect()) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let args: Vec<_> = std::env::args().skip(1).collect();
     let demo = args.iter().any(|a| a == "--demo");
     let dry = args.iter().any(|a| a == "--dry-run");
@@ -371,15 +385,12 @@ fn main() -> Result<()> {
             if index >= state.config.rules.len() {
                 return;
             }
-            let mut rules = state.config.rules.clone();
-            rules.remove(index);
-            let revision = state.config.rules_revision;
             let result = if state.demo {
-                state.config.rules = rules;
+                state.config.rules.remove(index);
                 Ok(())
             } else {
                 ConfigStore::at(&state.home)
-                    .replace_rules(rules, revision)
+                    .forget(index, &state.config.routing_text)
                     .map(|config| {
                         state.config = config;
                     })

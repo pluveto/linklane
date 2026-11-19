@@ -16,6 +16,7 @@ if ($Tag -and -not (Test-Path -LiteralPath "docs/releases/$Tag.md")) {
 
 cargo build --locked --release --target x86_64-pc-windows-msvc
 $exe = Join-Path $metadata.target_directory 'x86_64-pc-windows-msvc/release/linklane.exe'
+$cli = Join-Path (Split-Path $exe) 'linklane-cli.exe'
 $dist = Join-Path $pwd 'dist'
 $staging = Join-Path $dist "linklane-v$version-windows-x86_64"
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
@@ -32,6 +33,19 @@ if ($smoke.ExitCode -ne 0 -or (Get-Content -LiteralPath $smokeOutput -Raw).Trim(
     throw "Release executable smoke check failed; inspect $smokeError"
 }
 
+$previousHome = $env:LINKLANE_HOME
+$env:LINKLANE_HOME = Join-Path $dist ('smoke-' + [guid]::NewGuid())
+try {
+    $rulesPath = & $cli rules path
+    if (-not (Test-Path -LiteralPath $rulesPath)) { throw 'CLI did not print a usable TOML path' }
+    $applied = 'rules = []' | & $cli rules replace -
+    if ($applied -ne 'APPLIED: 0') { throw 'CLI replacement through stdin failed' }
+    $validated = & $cli rules check
+    if ($validated -ne 'OK: 0') { throw 'CLI did not validate the applied TOML' }
+} finally {
+    $env:LINKLANE_HOME = $previousHome
+}
+
 $toolVersion = '0.9.3'
 $toolName = "cargo-about-$toolVersion-x86_64-pc-windows-msvc"
 $toolRoot = Join-Path $pwd 'artifacts/tools'
@@ -45,6 +59,7 @@ if (-not (Test-Path -LiteralPath $about)) {
 & $about generate --locked about.hbs -o (Join-Path $staging 'THIRD_PARTY_LICENSES.html')
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $staging 'linklane.exe')
+Copy-Item -LiteralPath $cli -Destination $staging
 Copy-Item -LiteralPath 'README.md','LICENSE','scripts/uninstall.ps1' -Destination $staging
 New-Item -ItemType Directory -Force -Path (Join-Path $staging 'docs') | Out-Null
 Copy-Item -LiteralPath 'docs/RULES.md','docs/images' -Destination (Join-Path $staging 'docs') -Recurse -Force

@@ -1,98 +1,81 @@
-# 高级规则
+# 网站设置：TOML 与命令行
 
-在“高级规则”中编辑 JSON，“测试草稿”仅解释匹配结果；“校验并应用”保存后生效。
-规则按数组顺序匹配，第一条命中即决定打开身份或每次询问。停用规则会跳过；目标身份暂不可用时回到选择器，并显示原因。
-all 全部满足，any 至少一项满足（空数组表示忽略），exclude 任意一项满足就排除。all 与 any 至少填写一个条件。
-“每次都让我选”和命令行 --choose 优先于所有规则。
-基础选择器的“记住网站”会更新已有精确来源规则，或把新规则加在末尾；可在编辑器中调整顺序。
+底部点“网站设置”，再点“复制路径”。`rules.toml` 顶部列出了所有写法、示例和命令。把路径和你想要的结果交给 AI，例如：“把公司 GitHub 项目分给工作身份，校验并告诉我这个链接会怎么打开。”
 
-## Query 跳转目标
+## 试一条
 
-规则先解析 query 中的目标网址，再匹配该目标。实际打开保留完整原始链接，让网站继续完成中转、登录回跳和签名校验。解析全程在本地完成。
+文件为空时是 `rules = []`。添加第一条 `[[rules]]` 前，删掉这一行。用“示例与身份标识”或 `rules identities` 找到自己的 `identity`。
 
-例如 https://link.example/out?url=https%3A%2F%2Fgithub.com%2Facme，会按 https://github.com/acme 匹配浏览器身份，浏览器收到的仍是 link.example 的原始链接。勾选记住网站时保存 github.com 的来源。
+```toml
+[[rules]]
+name = "公司的 GitHub 项目"
+enabled = true
+all = [
+  { kind = "host", value = "github.com" },
+  { kind = "pathPrefix", value = "/acme" },
+]
+exclude = [{ kind = "query", key = "personal", value = { kind = "exact", value = "1" } }]
+action = { kind = "open", identity = "chrome:Default" }
 
-默认参数（区分大小写）：url、target、redirect、redirect_url、redirect_uri、redirectUrl、destination、dest、return_url、returnUrl、continue。参数值可为 HTTP/HTTPS URL、/ 开头的相对路径或 // 开头的跨域地址。普通搜索词保持原网址。
-
-支持最多 8 层嵌套。每层 query 按 URL 表单规则解码；额外百分号编码最多尝试 3 层，识别出网址即停止，保留目标中的 %2F、%2B 与签名值。不同候选目标、过深嵌套或含账号密码的目标会交回选择器，并暂停自动记忆。重复参数指向同一目标时可继续解析。
-
-高级编辑框在 rules 同级接受 resolution，例如：
-
-```json
-{
-  "rules": [],
-  "resolution": {
-    "parameters": ["url", "target", "redirect_url"],
-    "sites": [
-      { "host": "go.example.com", "parameters": ["to"] },
-      { "host": "login.example.com", "parameters": [] },
-      { "host": "example.org", "subdomains": true, "parameters": ["destination"] }
-    ]
-  }
-}
+[[rules]]
+name = "本机开发服务每次询问"
+enabled = true
+all = [{ kind = "host", value = "localhost" }, { kind = "port", min = 3000, max = 3999 }]
+action = { kind = "ask" }
 ```
 
-保留自己的 rules，仅修改 resolution。sites 按顺序取第一条域名匹配项，该项参数列表替换默认列表；空列表表示保留原网址。parameters 与 sites 均为空时全局关闭解析。省略 resolution 会使用默认参数列表。特定网站用 q、u 等参数时，可在 sites 中指定。
+从上往下采用首条命中的设置。`all` 全部满足；`any` 非空时至少命中一项；`exclude` 命中任一项会跳过。`all` 与 `any` 至少填写一个条件。“每次都让我选”优先。找不到目标身份时，轻舟会请你重新选择。
 
-“测试草稿”和 --explain 会显示原始链接、逐层参数、匹配目标和命中的浏览器身份。解析结果只用于本次匹配，配置只保存手工设置和记住的目标来源。服务器短链接和 JavaScript 中转页留待后续解析方式支持。
+| 条件 | 用途 |
+| --- | --- |
+| `origin` | 精确匹配协议、域名和有效端口；省略尾部 `/` 和默认端口。 |
+| `host` | 匹配域名或 IP；`subdomains = true` 同时包含根域与子域。 |
+| `scheme` | `http` 或 `https`。 |
+| `port` | `min` 至 `max`，含端点；默认端口为 80 或 443。 |
+| `pathPrefix` | 以完整路径段匹配，例如 `/acme` 匹配 `/acme/project`。 |
+| `path` | 以 `pattern` 匹配百分号编码后的路径。 |
+| `url` | 以 `pattern` 匹配完整规范化网址，含查询参数和片段。 |
+| `query` | 以 `key` 匹配参数名。可选 `value` 表达式匹配任一同名参数解码后的值。 |
 
-## 示例
+`path`、`url`、`query` 支持 `{ kind = "exact", value = "…" }`、`glob` 或 `regex`。路径的 `*` 匹配一段、`**` 可跨段、`?` 匹配一个字符。`url` 和 `query` 中的 `*` 可跨 `/`。Rust 正则语法支持 `^` / `$` 锚定和 `(?i)` 忽略大小写。
 
-identity 请替换为上方“当前可用身份”中的真实标识。
+## 链接跳转
 
-```json
-{
-  "rules": [
-    {
-      "name": "公司的 GitHub 项目",
-      "enabled": true,
-      "all": [
-        { "kind": "host", "value": "github.com" },
-        { "kind": "pathPrefix", "value": "/acme" }
-      ],
-      "exclude": [
-        { "kind": "query", "key": "personal", "value": { "kind": "exact", "value": "1" } }
-      ],
-      "action": { "kind": "open", "identity": "chrome:Default" }
-    },
-    {
-      "name": "本机开发服务",
-      "enabled": true,
-      "all": [
-        { "kind": "host", "value": "localhost" },
-        { "kind": "port", "min": 3000, "max": 3999 }
-      ],
-      "action": { "kind": "open", "identity": "edge:Default" }
-    },
-    {
-      "name": "其他公司网站先询问",
-      "enabled": true,
-      "all": [{ "kind": "host", "value": "example.com", "subdomains": true }],
-      "action": { "kind": "ask" }
-    }
-  ]
-}
+轻舟会从 `url`、`target` 等查询参数逐层提取目的地，以目的地决定身份，打开时仍交给浏览器原链接。出现多个目标、过深嵌套或目标带登录信息时，显示选择器并暂停自动记忆。可直接在已有文件中修改下面的设置：
+
+```toml
+[resolution]
+parameters = ["url", "target", "redirect_url"]
+
+[[resolution.sites]]
+host = "go.example.com"
+subdomains = true
+parameters = ["to"]
+
+[[resolution.sites]]
+host = "login.example.com"
+parameters = []
 ```
 
-## 条件
+首条域名匹配项覆盖默认参数。网站对应的空列表表示按原链接匹配。默认和站点列表都为空时全局关闭。省略整个 `[resolution]` 会采用内置默认值。
 
-- origin：精确协议、域名和有效端口。例如 {"kind":"origin","value":"https://example.com"}。默认端口省略，末尾省略 /。
-- host：域名或 IP。域名大小写及国际化域名按 URL 标准归一化。subdomains:true 同时包含根域和子域；example.com.evil.test 永远属于另一个域。
-- scheme：value 为 http 或 https。
-- port：min / max 为闭区间；省略端口的 https 使用 443，http 使用 80。
-- pathPrefix：按路径段匹配。/acme 匹配 /acme 与 /acme/project，排除 /acme-other。
-- path：pattern 为 exact、glob 或 regex。路径区分大小写，使用 URL 百分号编码形式。
-- url：pattern 为 exact、glob 或 regex，匹配规范化后的完整网址（包含查询参数和片段）。
-- query：key 区分大小写；省略 value 表示参数存在。value 为 exact、glob 或 regex，匹配 URL 解码后的参数值；重复参数中任意一个值满足即可。
+## 校验与生效
 
-pattern 示例：{"kind":"glob","value":"/acme/**"}、{"kind":"regex","value":"^/project/[0-9]+$"}。
-path glob 中 * 匹配一个路径段，** 跨路径段；? 匹配一个字符。url / query glob 中 * 可跨 /。
-正则使用 Rust regex 语法，默认区分大小写且匹配任意子串；用 ^ 和 $ 锚定，(?i) 忽略大小写。
-正则表达式采用有界编译大小及线性时间匹配，支持字符类与分组；反向引用和环视会显示校验错误。
+在窗口编辑时，先“测试草稿”，再“校验并应用”。在外部编辑器保存时，点“从文件重新加载”。打开“网站设置”会显示当前生效的版本。加载失败会显示原因，草稿留在磁盘，后续链接仍使用上次生效的设置。
 
-## 数据与调试
+自动记住和移除网站前会检查磁盘上有没有待加载的编辑。建议先加载文件，再继续在窗口中修改。
 
-编辑框中的草稿在点击“校验并应用”后进入 settings.json。语法、字段或规则无效时保留原配置与当前草稿。
-其他窗口修改了规则时，会提示先保留草稿，再“重新载入”合并。自动打开产生的最近使用记录可与规则编辑并行保存。
-仅手动编写的条件值进入配置；输入测试的网址保留在当前窗口内。自动记住网站仅保存 origin。
---list-identities 列出本机标识；--dry-run URL 输出 OPEN / ASK；--explain URL 输出逐条匹配原因。
+命令行程序与 `linklane.exe` 放在同一目录。下面使用默认的每用户安装路径：
+
+```powershell
+$cli = "$env:LOCALAPPDATA\Linklane\bin\linklane-cli.exe"
+& $cli rules path
+& $cli rules show
+& $cli rules identities
+& $cli rules check 'C:\path\draft.toml'
+& $cli rules replace 'C:\path\draft.toml'
+& $cli rules reload
+& $cli rules explain 'https://github.com/acme/example'
+```
+
+`check` 省略文件时检查磁盘上的 `rules.toml`。`replace` 应用整个文件（包括跳转设置）；传 `-` 可从标准输入读取 UTF-8。成功输出 `OK: 数量` 或 `APPLIED: 数量`；错误写入标准错误，退出码为 `1`。`show` 输出当前生效的 TOML，可作为编辑副本的起点。身份暂不可用会在实际匹配时提示，也可先用 `identities` 核对本机标识。

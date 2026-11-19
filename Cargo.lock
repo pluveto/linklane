@@ -2463,9 +2463,10 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
 name = "linklane"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "configparser",
  "dirs",
  "fs2",
@@ -2479,6 +2480,8 @@ dependencies = [
  "slint-build",
  "tempfile",
  "time",
+ "toml",
+ "toml_edit",
  "url",
  "winreg",
 ]
