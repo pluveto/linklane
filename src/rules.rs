@@ -135,6 +135,13 @@ enum Predicate {
 }
 
 impl Condition {
+    pub(crate) fn path_has_prefix(path: &str, prefix: &str) -> bool {
+        path == prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+
     fn compile(&self) -> Result<Predicate> {
         Ok(match self {
             Self::Origin { value } => {
@@ -204,13 +211,7 @@ impl Predicate {
                 .port_or_known_default()
                 .is_some_and(|port| (*min..=*max).contains(&port)),
             Self::Path(pattern) => pattern.is_match(url.path()),
-            Self::PathPrefix(value) => {
-                url.path() == value
-                    || url
-                        .path()
-                        .strip_prefix(value)
-                        .is_some_and(|suffix| suffix.starts_with('/'))
-            }
+            Self::PathPrefix(value) => Condition::path_has_prefix(url.path(), value),
             Self::Url(pattern) => pattern.is_match(url.as_str()),
             Self::Query(key, value) => url.query_pairs().any(|(name, content)| {
                 name == key.as_str()
@@ -227,6 +228,27 @@ struct PreparedRule {
     all: Vec<Predicate>,
     any: Vec<Predicate>,
     exclude: Vec<Predicate>,
+}
+
+impl PreparedRule {
+    fn skip_reason(&self, url: &Url) -> Option<String> {
+        if !self.rule.enabled {
+            Some("已停用".into())
+        } else if let Some(failed) = self
+            .all
+            .iter()
+            .position(|condition| !condition.matches(url))
+        {
+            Some(format!("all 第 {} 项未命中", failed + 1))
+        } else if !self.any.is_empty() && !self.any.iter().any(|condition| condition.matches(url)) {
+            Some("any 条件均未命中".into())
+        } else {
+            self.exclude
+                .iter()
+                .position(|condition| condition.matches(url))
+                .map(|excluded| format!("被 exclude 第 {} 项排除", excluded + 1))
+        }
+    }
 }
 
 #[non_exhaustive]
@@ -272,6 +294,12 @@ impl RuleSet {
         Ok(Self(prepared))
     }
 
+    pub(crate) fn first_match(&self, url: &Url, consider: impl Fn(&Rule) -> bool) -> Option<usize> {
+        self.0
+            .iter()
+            .position(|prepared| consider(&prepared.rule) && prepared.skip_reason(url).is_none())
+    }
+
     pub(crate) fn decide(&self, url: &Url, profiles: &[Profile], paused: bool) -> Decision {
         let mut trace = Vec::new();
         if paused {
@@ -284,30 +312,8 @@ impl RuleSet {
         for (index, prepared) in self.0.iter().enumerate() {
             let rule = &prepared.rule;
             let label = format!("{}. {}", index + 1, rule.name);
-            if !rule.enabled {
-                trace.push(format!("{label}：已停用"));
-                continue;
-            }
-            if let Some(failed) = prepared
-                .all
-                .iter()
-                .position(|condition| !condition.matches(url))
-            {
-                trace.push(format!("{label}：all 第 {} 项未命中", failed + 1));
-                continue;
-            }
-            if !prepared.any.is_empty()
-                && !prepared.any.iter().any(|condition| condition.matches(url))
-            {
-                trace.push(format!("{label}：any 条件均未命中"));
-                continue;
-            }
-            if let Some(excluded) = prepared
-                .exclude
-                .iter()
-                .position(|condition| condition.matches(url))
-            {
-                trace.push(format!("{label}：被 exclude 第 {} 项排除", excluded + 1));
+            if let Some(reason) = prepared.skip_reason(url) {
+                trace.push(format!("{label}：{reason}"));
                 continue;
             }
             let mut notice = None;
@@ -351,6 +357,7 @@ impl RuleSet {
 }
 
 impl Rule {
+    #[cfg(test)]
     pub(crate) fn remembered(origin: String, identity: IdentityId) -> Self {
         Self {
             name: format!("网站：{origin}"),
@@ -362,13 +369,12 @@ impl Rule {
         }
     }
 
-    pub(crate) fn origin(&self) -> Option<&str> {
-        match self.all.as_slice() {
-            [Condition::Origin { value }] if self.any.is_empty() && self.exclude.is_empty() => {
-                Some(value)
-            }
-            _ => None,
-        }
+    pub(crate) fn is_site_fallback(&self) -> bool {
+        matches!(
+            self.all.as_slice(),
+            [Condition::Origin { .. } | Condition::Host { .. }]
+        ) && self.any.is_empty()
+            && self.exclude.is_empty()
     }
 }
 

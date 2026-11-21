@@ -1,4 +1,4 @@
-import { Button, CheckBox, LineEdit, TextEdit, ScrollView, Palette } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, TextEdit, ScrollView, Palette } from "std-widgets.slint";
 
 export struct Identity { name: string, original: string, browser: string, initial: string, tint: color, ink: color, recent: bool }
 export struct Website { address: string, identity: string }
@@ -63,7 +63,8 @@ export component MainWindow inherits Window {
     in property <[Identity]> identities;
     in property <[Website]> websites;
     in-out property <string> link;
-    in property <string> site;
+    in property <[string]> remember-scopes;
+    in-out property <int> remember-index: 0;
     in property <string> resolved-target;
     in property <string> resolution-summary;
     changed resolution-summary => { root.resize-window(root.width, root.height); }
@@ -140,6 +141,20 @@ export component MainWindow inherits Window {
                         Text { text: root.resolution-summary; color: Theme.muted; font-size: 11px; wrap: word-wrap; }
                         if root.resolved-target != "" : resolved-target-view := LineEdit { text: root.resolved-target; read-only: true; accessible-label: "匹配目标网址"; }
                     }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        remember-check := CheckBox {
+                            text: "下次记住";
+                            checked <=> root.remember-site;
+                            enabled: root.remember-scopes.length > 0;
+                        }
+                        if root.remember-scopes.length > 0 : remember-scope := ComboBox {
+                            model: root.remember-scopes;
+                            current-index <=> root.remember-index;
+                            enabled: root.remember-site;
+                            accessible-label: "记住哪些链接";
+                        }
+                    }
                     ScrollView {
                         vertical-stretch: 1;
                         horizontal-scrollbar-policy: always-off;
@@ -157,7 +172,6 @@ export component MainWindow inherits Window {
                             Rectangle { vertical-stretch: 1; }
                         }
                     }
-                    remember-check := CheckBox { text: root.resolved-target == "" ? "下次也用这个身份打开此网站" : "下次也用这个身份打开目标网站"; checked <=> root.remember-site; enabled: root.site != ""; }
                 }
                 if root.page == 1 : VerticalLayout {
                     spacing: 12px;

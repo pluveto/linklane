@@ -9,8 +9,12 @@ use std::{
 use time::OffsetDateTime;
 
 use crate::{
-    browsers::Profile, identity::IdentityId, resolution::ResolutionSettings,
-    rule_document::RuleDocument, rules::Rule,
+    browsers::Profile,
+    identity::IdentityId,
+    remember::RememberScope,
+    resolution::ResolutionSettings,
+    rule_document::RuleDocument,
+    rules::{Rule, RuleAction, RuleSet},
 };
 
 #[non_exhaustive]
@@ -64,24 +68,51 @@ impl Config {
         });
     }
 
-    pub(crate) fn remember(&mut self, url: &url::Url, identity: &IdentityId) {
-        let origin = url.origin().ascii_serialization();
+    pub(crate) fn remember(
+        &mut self,
+        url: &url::Url,
+        index: usize,
+        identity: &IdentityId,
+    ) -> Result<()> {
+        let scope = RememberScope::suggest(url)
+            .into_iter()
+            .nth(index)
+            .context("请重新选择要记住的范围")?;
+        let conditions = scope.conditions();
+        let action = RuleAction::Open {
+            identity: identity.clone(),
+        };
         if let Some(rule) = self
             .rules
             .iter_mut()
-            .find(|rule| rule.origin() == Some(origin.as_str()))
+            .find(|rule| rule.all == conditions && rule.any.is_empty() && rule.exclude.is_empty())
         {
             rule.enabled = true;
-            rule.action = crate::rules::RuleAction::Open {
-                identity: identity.clone(),
-            };
+            rule.action = action;
         } else {
-            let mut rule = Rule::remembered(origin, identity.clone());
+            let position = RuleSet::compile(&self.rules)?.first_match(url, |rule| {
+                if scope.is_origin() {
+                    // Keep existing path exceptions ahead of the origin-wide fallback.
+                    rule.is_site_fallback()
+                } else {
+                    !scope.is_broader_than(rule)
+                }
+            });
+            let mut rule = Rule {
+                name: scope.name(),
+                enabled: true,
+                all: conditions,
+                any: vec![],
+                exclude: vec![],
+                action,
+            };
             while self.rules.iter().any(|existing| existing.name == rule.name) {
                 rule.name.push('·');
             }
-            self.rules.push(rule);
+            self.rules
+                .insert(position.unwrap_or(self.rules.len()), rule);
         }
+        Ok(())
     }
 
     fn validate_preferences(&self) -> Result<()> {

@@ -108,9 +108,9 @@ fn concurrent_remember_and_forget_preserve_other_rules_and_comments() {
                     .update(|config| {
                         config.remember(
                             &url::Url::parse(&format!("https://site{index}.test")).unwrap(),
+                            0,
                             &IdentityId::new("chrome", "Default")?,
-                        );
-                        Ok(())
+                        )
                     })
                     .unwrap();
             });
@@ -138,9 +138,9 @@ fn remember_updates_an_existing_origin_in_each_toml_style_and_removes_the_last_r
             .update(|config| {
                 config.remember(
                     &url::Url::parse("https://example.com/p?secret=private").unwrap(),
+                    0,
                     &IdentityId::new("edge", "Default")?,
-                );
-                Ok(())
+                )
             })
             .unwrap();
         assert_eq!(next.rules.len(), 1);
@@ -155,6 +155,110 @@ fn remember_updates_an_existing_origin_in_each_toml_style_and_removes_the_last_r
                 .unwrap()
                 .rules
                 .is_empty()
+        );
+    }
+}
+
+#[test]
+fn nested_path_choices_persist_as_exceptions_to_an_existing_host_preference() {
+    for site in [
+        r#"rules = [{ name = "Host", enabled = true, all = [{ kind = "host", value = "example.test" }], action = { kind = "open", identity = "chrome:Default" } }]"#,
+        "# Website default\n[[rules]]\nname = 'Host'\nenabled = true\nall = [{kind = 'host', value = 'example.test'}]\n[rules.action]\nkind = 'open'\nidentity = 'chrome:Default'\n",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::at(directory.path());
+        store.replace_document(site, None).unwrap();
+        let target =
+            url::Url::parse("https://example.test/Team/One.Utils/path/1?secret=private#comment")
+                .unwrap();
+        let chrome = Profile::preview(BrowserFamily::Chrome, "Default", "General").unwrap();
+        let edge = Profile::preview(BrowserFamily::Edge, "Default", "Team").unwrap();
+        let brave = Profile::preview(BrowserFamily::Brave, "Default", "Project").unwrap();
+        let profiles = [chrome, edge, brave];
+        for (scope, profile) in [(2, &profiles[2]), (1, &profiles[1]), (0, &profiles[0])] {
+            store
+                .update(|config| config.remember(&target, scope, &profile.id))
+                .unwrap();
+        }
+        let saved = store.load().unwrap();
+        assert_eq!(saved.rules.len(), 4);
+        assert!(!saved.routing_text.contains("secret=private"));
+        assert!(!saved.routing_text.contains("#comment"));
+        if site.contains("# Website default") {
+            assert!(saved.routing_text.contains("# Website default"));
+        }
+        let rules = RuleSet::compile(&saved.rules).unwrap();
+        for (path, expected) in [
+            ("/Team/One.Utils/path/2", Some(&profiles[2].id)),
+            ("/Team/One.Utils-extra", Some(&profiles[1].id)),
+            ("/Team/one.utils", Some(&profiles[1].id)),
+            ("/Team", Some(&profiles[1].id)),
+            ("/team/One.Utils", Some(&profiles[0].id)),
+            ("/Team-extra/One.Utils", Some(&profiles[0].id)),
+        ] {
+            let url = url::Url::parse(&format!("https://example.test{path}")).unwrap();
+            assert_eq!(
+                rules.decide(&url, &profiles, false).identity.as_ref(),
+                expected,
+                "{url}"
+            );
+        }
+    }
+}
+
+#[test]
+fn suggestions_use_literal_uri_segments_and_keep_scheme_host_and_port() {
+    let labels = |url| {
+        RememberScope::suggest(&url::Url::parse(url).unwrap())
+            .into_iter()
+            .map(|scope| scope.label())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels("http://[::1]:8080//A%2FB/C/?token=private#fragment"),
+        [
+            "http://[::1]:8080 下的所有链接",
+            "//A%2FB 及下级",
+            "//A%2FB/C 及下级"
+        ]
+    );
+    assert_eq!(
+        labels("https://example.test/path"),
+        ["https://example.test 下的所有链接", "/path 及下级"]
+    );
+    assert_eq!(
+        labels("https://example.test/?key=value"),
+        ["https://example.test 下的所有链接"]
+    );
+}
+
+#[test]
+fn generic_section_overrides_the_remembered_site_at_segment_and_origin_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::at(directory.path());
+    store.replace_document(WORK, None).unwrap();
+    let url = url::Url::parse("https://example.com:8443/docs/start").unwrap();
+    let site = Profile::preview(BrowserFamily::Edge, "Default", "Site").unwrap();
+    let section = Profile::preview(BrowserFamily::Brave, "Default", "Docs").unwrap();
+    let fallback = Profile::preview(BrowserFamily::Chrome, "Default", "Other").unwrap();
+    store
+        .update(|config| config.remember(&url, 0, &site.id))
+        .unwrap();
+    let config = store
+        .update(|config| config.remember(&url, 1, &section.id))
+        .unwrap();
+    let profiles = [site, section, fallback];
+    let rules = RuleSet::compile(&config.rules).unwrap();
+    for (address, expected) in [
+        ("https://example.com:8443/docs", &profiles[1].id),
+        ("https://example.com:8443/docs/api", &profiles[1].id),
+        ("https://example.com:8443/docs-v2/start", &profiles[0].id),
+        ("https://example.com/docs/start", &profiles[2].id),
+    ] {
+        let url = url::Url::parse(address).unwrap();
+        assert_eq!(
+            rules.decide(&url, &profiles, false).identity.as_ref(),
+            Some(expected)
         );
     }
 }

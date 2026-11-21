@@ -14,10 +14,6 @@ pub(crate) fn parse_link(raw: &str) -> Result<Url> {
     Ok(link)
 }
 
-pub(crate) fn site_key(url: &Url) -> String {
-    url.origin().ascii_serialization()
-}
-
 pub(crate) fn app_home() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("LINKLANE_HOME") {
         return Ok(std::path::absolute(path)?);

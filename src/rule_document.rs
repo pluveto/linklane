@@ -67,20 +67,22 @@ impl RuleDocument {
                 _ => anyhow::bail!("rules 应为表数组"),
             }
         }
-        for rule in next
-            .iter()
-            .filter(|rule| !previous.iter().any(|old| old.name == rule.name))
-        {
-            let table = Self::rule_table(rule)?;
+        for (index, rule) in next.iter().enumerate() {
+            if previous.iter().any(|old| old.name == rule.name) {
+                continue;
+            }
+            let mut table = Self::rule_table(rule)?;
             if let Some(tables) = rules.as_array_of_tables_mut() {
-                tables.push(table);
+                // The serializer uses the original document positions to order tables.
+                table.set_position(tables.get(index).and_then(Table::position));
+                tables.insert(index, table);
             } else if let Some(array) = rules.as_array_mut() {
                 if array.is_empty() {
                     let mut tables = toml_edit::ArrayOfTables::new();
                     tables.push(table);
                     *rules = Item::ArrayOfTables(tables);
                 } else {
-                    array.push(table.into_inline_table());
+                    array.insert(index, table.into_inline_table());
                 }
             }
         }

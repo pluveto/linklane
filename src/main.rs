@@ -7,6 +7,7 @@ mod advanced;
 mod browsers;
 mod config;
 mod identity;
+mod remember;
 mod resolution;
 mod routing;
 mod rule_document;
@@ -14,12 +15,11 @@ mod rules;
 mod rules_cli;
 use browsers::{BrowserCatalog, BrowserFamily, Profile};
 use config::{Config, ConfigStore};
-use routing::{
-    app_home, install_and_register, is_default, open_default_settings, parse_link, site_key,
-};
+use remember::RememberScope;
+use routing::{app_home, install_and_register, is_default, open_default_settings, parse_link};
 use rules::{RuleAction, RuleSet};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{cell::RefCell, rc::Rc};
 slint::include_modules!();
 
@@ -91,33 +91,36 @@ fn render(ui: &MainWindow, state: &mut State) {
 
 // RATIONALE: this UI boundary projects the resolved URL without changing the opening URL.
 fn preview_resolution(ui: &MainWindow, config: &Config) {
-    ui.set_resolved_target("".into());
-    ui.set_resolution_summary("".into());
-    ui.set_site("".into());
-    if let Ok(url) = parse_link(ui.get_link().as_str()) {
-        let resolved = config.resolution.resolve(&url);
-        if let Some(target) = resolved.matching_url() {
-            ui.set_site(site_key(target).into());
-            if resolved.changed() {
-                ui.set_resolved_target(target.as_str().into());
-            }
-        } else {
-            ui.set_remember_site(false);
-        }
-        if resolved.changed() {
-            ui.set_resolution_summary(resolved.summary().into());
-        }
+    let url = parse_link(ui.get_link().as_str()).ok();
+    let resolved = url.as_ref().map(|url| config.resolution.resolve(url));
+    let target = resolved
+        .as_ref()
+        .and_then(|resolved| resolved.matching_url());
+    let changed = resolved.as_ref().filter(|resolved| resolved.changed());
+    ui.set_resolved_target(changed.and(target).map_or("", url::Url::as_str).into());
+    ui.set_resolution_summary(
+        changed
+            .map(|resolved| resolved.summary())
+            .unwrap_or_default()
+            .into(),
+    );
+    let labels = target
+        .map(RememberScope::suggest)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|scope| slint::SharedString::from(scope.label()))
+        .collect::<Vec<_>>();
+    if !ui.get_remember_scopes().iter().eq(labels.iter().cloned()) {
+        ui.set_remember_scopes(ModelRc::new(VecModel::from(labels)));
+        ui.set_remember_index(0);
     }
 }
 
-fn edit_config(state: &mut State, update: impl FnOnce(&mut Config)) -> Result<()> {
+fn edit_config(state: &mut State, update: impl FnOnce(&mut Config) -> Result<()>) -> Result<()> {
     if state.demo {
-        update(&mut state.config);
+        update(&mut state.config)?;
     } else {
-        state.config = ConfigStore::at(&state.home).update(|config| {
-            update(config);
-            Ok(())
-        })?;
+        state.config = ConfigStore::at(&state.home).update(update)?;
     }
     Ok(())
 }
@@ -287,12 +290,6 @@ fn main() -> Result<()> {
         }
     });
     ui.set_link(initial.as_str().into());
-    ui.set_site(
-        parse_link(&initial)
-            .map(|u| site_key(&u))
-            .unwrap_or_default()
-            .into(),
-    );
     ui.set_message(message.into());
     let state = Rc::new(RefCell::new(State {
         home,
@@ -308,7 +305,7 @@ fn main() -> Result<()> {
         let state = state.clone();
         move |_value| {
             if let Some(ui) = weak.upgrade() {
-                ui.set_remember_site(true);
+                ui.set_remember_index(0);
                 preview_resolution(&ui, &state.borrow().config);
                 ui.set_message("".into());
             }
@@ -325,6 +322,13 @@ fn main() -> Result<()> {
                 let url = parse_link(ui.get_link().as_str())?;
                 let mut state = state.borrow_mut();
                 let resolved = state.config.resolution.resolve(&url);
+                let selection = if ui.get_remember_site() {
+                    resolved
+                        .matching_url()
+                        .zip(usize::try_from(ui.get_remember_index()).ok())
+                } else {
+                    None
+                };
                 let profile = state
                     .profiles
                     .get(usize::try_from(index).unwrap_or(usize::MAX))
@@ -335,11 +339,13 @@ fn main() -> Result<()> {
                 }
                 edit_config(&mut state, |c| {
                     c.mark_used(&profile.id);
-                    if ui.get_remember_site()
-                        && let Some(target) = resolved.matching_url()
-                    {
-                        c.remember(target, &profile.id);
+                    if let Some((target, index)) = selection {
+                        if c.resolution.resolve(&url).matching_url() != Some(target) {
+                            bail!("目标网址的识别方式已变更，请重新打开轻舟后再保存。");
+                        }
+                        c.remember(target, index, &profile.id)?;
                     }
+                    Ok(())
                 })
                 .context("网站已打开，但没能保存这次选择")?;
                 render(&ui, &mut state);
@@ -356,7 +362,7 @@ fn main() -> Result<()> {
                             "已用"
                         },
                         name,
-                        if ui.get_remember_site() {
+                        if selection.is_some() {
                             "，下次也会记住。"
                         } else {
                             "。"
@@ -426,6 +432,7 @@ fn main() -> Result<()> {
             };
             match edit_config(&mut state, |c| {
                 c.names.insert(id, name.to_owned());
+                Ok(())
             }) {
                 Ok(()) => {
                     render(&ui, &mut state);
@@ -443,7 +450,10 @@ fn main() -> Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            if let Err(e) = edit_config(&mut state, |c| c.always_ask = paused) {
+            if let Err(e) = edit_config(&mut state, |c| {
+                c.always_ask = paused;
+                Ok(())
+            }) {
                 ui.set_message(e.to_string().into());
             }
             render(&ui, &mut state);
